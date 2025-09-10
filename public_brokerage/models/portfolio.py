@@ -35,7 +35,7 @@ class Gain(BaseModel):
     """Gain information."""
     gainValue: str
     gainPercentage: str
-    timestamp: datetime
+    timestamp: Optional[datetime] = None
 
 
 class CostBasis(BaseModel):

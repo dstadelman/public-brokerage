@@ -12,9 +12,12 @@ class InstrumentType(str, Enum):
     """Types of financial instruments."""
     EQUITY = "EQUITY"
     OPTION = "OPTION"
-    INDEX = "INDEX"
     MULTI_LEG_INSTRUMENT = "MULTI_LEG_INSTRUMENT"
-    UNDERLYING_SECURITY_FOR_INDEX_OPTION = "UNDERLYING_SECURITY_FOR_INDEX_OPTION"
+    CRYPTO = "CRYPTO"
+    ALT = "ALT"
+    TREASURY = "TREASURY"
+    BOND = "BOND"
+    INDEX = "INDEX"
 
 
 class TradingStatus(str, Enum):
@@ -92,6 +95,7 @@ class QuoteOutcome(str, Enum):
     """Quote request outcome."""
     SUCCESS = "SUCCESS"
     FAILURE = "FAILURE"
+    UNKNOWN = "UNKNOWN"
 
 
 class Instrument(BaseModel):

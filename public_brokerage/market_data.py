@@ -124,7 +124,7 @@ def get_option_chain(
     response = client._make_request(
         method="POST",
         endpoint=f"/userapigateway/marketdata/{account_id}/option-chain",
-        data=request_data.model_dump()
+        data=request_data.model_dump(mode='json')
     )
     
     # Parse response

@@ -86,48 +86,48 @@ something like
 # Tasks
 
 ## Core Shell Infrastructure
-- [ ] Create `shell.py` - Main interactive shell program
-- [ ] Implement persistent session management with user state
-- [ ] Create config file (`~/.public_brokerage_config.json`) for storing default account
-- [ ] Implement automatic authentication with token refresh
-- [ ] Create command parser with support for flags and arguments
-- [ ] Implement command history and auto-completion
-- [ ] Add colored output and formatting for better UX
+- [x] Create `shell.py` - Main interactive shell program
+- [x] Implement persistent session management with user state
+- [x] Create config file (`~/.public_brokerage_config.json`) for storing default account
+- [x] Implement automatic authentication with token refresh
+- [x] Create command parser with support for flags and arguments
+- [x] Implement command history and auto-completion
+- [x] Add colored output and formatting for better UX
 
 ## Basic Commands
-- [ ] Implement `accounts` command - List all available accounts
-- [ ] Implement `set default account <account_id>` command - Set default account for session
-- [ ] Implement `show positions [account_id]` command - Show positions for default or specified account
-- [ ] Implement `show options <symbol>` command - Show option expirations for symbol
-- [ ] Implement `show chain <symbol> <expiration>` command - Show option chain
-- [ ] Implement `quote <symbol>` command - Get real-time quote
-- [ ] Implement `help` command - Show available commands and usage
+- [x] Implement `accounts` command - List all available accounts
+- [x] Implement `set default account <account_id>` command - Set default account for session
+- [x] Implement `show positions [account_id]` command - Show positions for default or specified account
+- [x] Implement `show options <symbol>` command - Show option expirations for symbol
+- [x] Implement `show chain <symbol> <expiration>` command - Show option chain
+- [x] Implement `quote <symbol>` command - Get real-time quote
+- [x] Implement `help` command - Show available commands and usage
 
 ## Options Position Analysis
-- [ ] Create `position_analyzer.py` - Analyze current positions to identify spreads
-- [ ] Implement spread detection logic for call spreads
-- [ ] Implement spread detection logic for put spreads
-- [ ] Handle complex positions with multiple spreads of same underlying
-- [ ] Create position grouping by underlying symbol and expiration
+- [x] Create `position_analyzer.py` - Analyze current positions to identify spreads
+- [x] Implement spread detection logic for call spreads
+- [x] Implement spread detection logic for put spreads
+- [x] Handle complex positions with multiple spreads of same underlying
+- [x] Create position grouping by underlying symbol and expiration
 
 ## Walk Limit Order Engine
-- [ ] Create `walk_limit_engine.py` - Background process manager for walk limit orders
-- [ ] Implement bid/ask spread calculation and increment logic
-- [ ] Implement order placement with incremental price walking
-- [ ] Add order monitoring and cancellation logic
-- [ ] Implement retry mechanism with exponential backoff
-- [ ] Add logging and status reporting for background processes
-- [ ] Implement process synchronization to prevent duplicate orders
+- [x] Create `walk_limit_engine.py` - Background process manager for walk limit orders
+- [x] Implement bid/ask spread calculation and increment logic
+- [x] Implement order placement with incremental price walking
+- [x] Add order monitoring and cancellation logic
+- [x] Implement retry mechanism with exponential backoff
+- [x] Add logging and status reporting for background processes
+- [x] Implement process synchronization to prevent duplicate orders
 
 ## Order Confirmation System
-- [ ] Create `confirmation_card.py` - Display detailed order confirmation cards
-- [ ] Implement spread pricing calculator (bid/ask for the entire spread)
-- [ ] Create option information formatter (strike, expiration, type, Greeks)
-- [ ] Implement real-time market data fetching for confirmation display
-- [ ] Add Greeks data integration from options endpoint
-- [ ] Create interactive confirmation prompt (y/n/details/cancel)
-- [ ] Implement order summary with cost basis and risk analysis
-- [ ] Add market impact estimation and liquidity warnings
+- [x] Create `confirmation_card.py` - Display detailed order confirmation cards
+- [x] Implement spread pricing calculator (bid/ask for the entire spread)
+- [x] Create option information formatter (strike, expiration, type, Greeks)
+- [x] Implement real-time market data fetching for confirmation display
+- [x] Add Greeks data integration from options endpoint
+- [x] Create interactive confirmation prompt (y/n/details/cancel)
+- [x] Implement order summary with cost basis and risk analysis
+- [x] Add market impact estimation and liquidity warnings
 
 ## Confirmation Card Features
 - [ ] **Opening Spread Confirmation Card:**
@@ -158,46 +158,46 @@ something like
   - [ ] Implement "details" option for extended analysis
 
 ## Open Call Spread Command
-- [ ] Implement `open_call_spread <symbol> <short_exp> <short_strike> <long_exp> <long_strike> <qty> [--max_wait_time=42] [--execute]`
-- [ ] Create multi-leg order construction for call spreads
-- [ ] Implement preflight validation for spread orders
-- [ ] Add current market data fetching for spread pricing
-- [ ] **Create confirmation card display before execution**
-- [ ] **Fetch and display Greeks for both legs of the spread**
-- [ ] **Show net credit/debit and break-even analysis**
-- [ ] **Implement user confirmation prompt with detailed spread info**
-- [ ] Implement dry-run mode (without --execute flag)
-- [ ] Add background process spawning for order execution (only after confirmation)
-- [ ] Implement real-time status updates during execution
+- [x] Implement `open_call_spread <symbol> <short_exp> <short_strike> <long_exp> <long_strike> <qty> [--max_wait_time=42] [--execute]`
+- [x] Create multi-leg order construction for call spreads
+- [x] Implement preflight validation for spread orders
+- [x] Add current market data fetching for spread pricing
+- [x] **Create confirmation card display before execution**
+- [x] **Fetch and display Greeks for both legs of the spread**
+- [x] **Show net credit/debit and break-even analysis**
+- [x] **Implement user confirmation prompt with detailed spread info**
+- [x] Implement dry-run mode (without --execute flag)
+- [x] Add background process spawning for order execution (only after confirmation)
+- [x] Implement real-time status updates during execution
 
 ## Close Call Spread Command  
-- [ ] Implement `close_call_spread <symbol> [--max_wait_time=42] [--execute]`
-- [ ] Create position analysis to identify existing call spreads
-- [ ] Handle multiple spreads for same underlying (split into separate processes)
-- [ ] **Create confirmation card for closing spreads**
-- [ ] **Show current position P&L and closing impact**
-- [ ] **Display current bid/ask for closing the spread**
-- [ ] **Show Greeks changes from closing the position**
-- [ ] **Implement confirmation prompt with closing analysis**
-- [ ] Implement spread closing logic (sell the spread)
-- [ ] Add conflict detection for already running close processes
-- [ ] Implement position validation before closing
-- [ ] Add support for partial closes and complex position scenarios
+- [x] Implement `close_call_spread <symbol> [--max_wait_time=42] [--execute]`
+- [x] Create position analysis to identify existing call spreads
+- [x] Handle multiple spreads for same underlying (split into separate processes)
+- [x] **Create confirmation card for closing spreads**
+- [x] **Show current position P&L and closing impact**
+- [x] **Display current bid/ask for closing the spread**
+- [x] **Show Greeks changes from closing the position**
+- [x] **Implement confirmation prompt with closing analysis**
+- [x] Implement spread closing logic (sell the spread)
+- [x] Add conflict detection for already running close processes
+- [x] Implement position validation before closing
+- [x] Add support for partial closes and complex position scenarios
 
 ## Background Process Management
-- [ ] Create `process_manager.py` - Manage multiple concurrent trading processes
-- [ ] Implement process status tracking and reporting
-- [ ] Add process cancellation and cleanup
-- [ ] Implement process persistence across shell sessions
-- [ ] Add process conflict detection and resolution
-- [ ] Create process logging and audit trail
-- [ ] Implement process timeout and error handling
+- [x] Create `process_manager.py` - Manage multiple concurrent trading processes
+- [x] Implement process status tracking and reporting
+- [x] Add process cancellation and cleanup
+- [x] Implement process persistence across shell sessions
+- [x] Add process conflict detection and resolution
+- [x] Create process logging and audit trail
+- [x] Implement process timeout and error handling
 
 ## Advanced Features
-- [ ] Add `status` command - Show all running background processes
-- [ ] Add `cancel <process_id>` command - Cancel specific background process
-- [ ] Add `cancel all` command - Cancel all running processes
-- [ ] Implement `logs <process_id>` command - Show process execution logs
+- [x] Add `status` command - Show all running background processes
+- [x] Add `cancel <process_id>` command - Cancel specific background process
+- [x] Add `cancel all` command - Cancel all running processes
+- [x] Implement `logs <process_id>` command - Show process execution logs
 - [ ] Add market hours validation for order placement
 - [ ] Implement position size validation and risk checks
 - [ ] Add support for put spreads (open_put_spread, close_put_spread)

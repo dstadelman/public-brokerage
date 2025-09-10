@@ -105,7 +105,7 @@ class RegulatoryFees(BaseModel):
     secFee: str
     tafFee: str
     orfFee: str
-    exchangeFee: str
+    exchangeFee: Optional[str] = None
     occFee: str
     catFee: str
 
@@ -164,12 +164,12 @@ class MultiLegPreflightResponse(BaseModel):
     legs: List[OrderLeg]
     estimatedCommission: str
     regulatoryFees: RegulatoryFees
-    estimatedIndexOptionFee: str
+    estimatedIndexOptionFee: Optional[str] = None
     orderValue: str
     estimatedQuantity: str
     estimatedCost: str
     buyingPowerRequirement: str
-    estimatedProceeds: str
+    estimatedProceeds: Optional[str] = None
     marginRequirement: Optional[MarginRequirement] = None
     marginImpact: Optional[MarginImpact] = None
     priceIncrement: Optional[PriceIncrement] = None

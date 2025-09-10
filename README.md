@@ -1,6 +1,6 @@
-# Public Brokerage Python Library
+# Public Brokerage Trading Shell
 
-A Python library for executing trades on Public brokerage using their API. This library supports all Public API endpoints including authentication, account management, market data, and order placement.
+A comprehensive Python trading system with an interactive shell interface for the Public Brokerage API. Features walk limit orders, sophisticated spread trading, and advanced position management.
 
 ## Features
 

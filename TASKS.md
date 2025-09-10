@@ -35,12 +35,12 @@ Use `python-dotenv` to manage environment variables for API keys and other sensi
 
 ### Task 1.1: Initialize Python Project Structure
 - [x] Create `.gitignore` file with Python project exclusions
-- [ ] Create main package directory `public_brokerage/`
-- [ ] Create `__init__.py` files for package structure
-- [ ] Create `setup.py` or `pyproject.toml` for package configuration
-- [ ] Create `requirements.txt` with dependencies
-- [ ] Create `.env.example` file with required environment variables
-- [ ] Create `README.md` with usage instructions
+- [x] Create main package directory `public_brokerage/`
+- [x] Create `__init__.py` files for package structure
+- [x] Create `setup.py` or `pyproject.toml` for package configuration
+- [x] Create `requirements.txt` with dependencies
+- [x] Create `.env.example` file with required environment variables
+- [x] Create `README.md` with usage instructions
 
 ### Task 1.2: Install Required Dependencies
 - [ ] Install `requests` for HTTP requests
@@ -51,48 +51,48 @@ Use `python-dotenv` to manage environment variables for API keys and other sensi
 ## Phase 2: Core Infrastructure & Models
 
 ### Task 2.1: Create Base Client Class
-- [ ] Create `client.py` with base `PublicBrokerageClient` class
-- [ ] Implement authentication handling (access token management)
-- [ ] Implement base HTTP request methods with error handling
-- [ ] Add retry logic and rate limiting
-- [ ] Add logging functionality
+- [x] Create `client.py` with base `PublicBrokerageClient` class
+- [x] Implement authentication handling (access token management)
+- [x] Implement base HTTP request methods with error handling
+- [x] Add retry logic and rate limiting
+- [x] Add logging functionality
 
 ### Task 2.2: Create Pydantic Models for API Responses
-- [ ] Create `models/` directory
-- [ ] Create `auth.py` - Authentication models (AccessTokenResponse)
-- [ ] Create `account.py` - Account models (Account, AccountType, BuyingPower)
-- [ ] Create `portfolio.py` - Portfolio models (Portfolio, Position, Equity)
-- [ ] Create `instrument.py` - Instrument models (Instrument, InstrumentType)
-- [ ] Create `order.py` - Order models (Order, OrderType, OrderStatus, OrderSide)
-- [ ] Create `market_data.py` - Market data models (Quote, OptionChain, OptionExpiration)
-- [ ] Create `common.py` - Common models and enums
+- [x] Create `models/` directory
+- [x] Create `auth.py` - Authentication models (AccessTokenResponse)
+- [x] Create `account.py` - Account models (Account, AccountType, BuyingPower)
+- [x] Create `portfolio.py` - Portfolio models (Portfolio, Position, Equity)
+- [x] Create `instrument.py` - Instrument models (Instrument, InstrumentType)
+- [x] Create `order.py` - Order models (Order, OrderType, OrderStatus, OrderSide)
+- [x] Create `market_data.py` - Market data models (Quote, OptionChain, OptionExpiration)
+- [x] Create `common.py` - Common models and enums
 
 ## Phase 3: Authentication Implementation
 
 ### Task 3.1: Implement Authentication Functions
-- [ ] Create `auth.py` module
-- [ ] Implement `create_access_token()` function
+- [x] Create `auth.py` module
+- [x] Implement `create_access_token()` function
   - Endpoint: `POST /userapiauthservice/personal/access-tokens`
   - Parameters: secret, validityInMinutes
   - Returns: AccessToken
-- [ ] Add token caching and refresh logic
-- [ ] Add environment variable support for secrets
+- [x] Add token caching and refresh logic
+- [x] Add environment variable support for secrets
 
 ## Phase 4: Account Management Functions
 
 ### Task 4.1: Implement Account List Function
-- [ ] Create `accounts.py` module
-- [ ] Implement `get_accounts()` function
+- [x] Create `accounts.py` module
+- [x] Implement `get_accounts()` function
   - Endpoint: `GET /userapigateway/trading/account`
   - Returns: List of Account objects
-- [ ] Add error handling for 401/404 responses
+- [x] Add error handling for 401/404 responses
 
 ### Task 4.2: Implement Account Details Functions
-- [ ] Implement `get_account_portfolio()` function
+- [x] Implement `get_account_portfolio()` function
   - Endpoint: `GET /userapigateway/trading/{accountId}/portfolio/v2`
   - Parameters: accountId
   - Returns: Portfolio object with positions, equity, orders
-- [ ] Implement `get_account_history()` function
+- [x] Implement `get_account_history()` function
   - Endpoint: `GET /userapigateway/trading/{accountId}/history`
   - Parameters: accountId, date filters
   - Returns: Account history data
@@ -100,79 +100,79 @@ Use `python-dotenv` to manage environment variables for API keys and other sensi
 ## Phase 5: Instrument and Market Data Functions
 
 ### Task 5.1: Implement Instrument Functions
-- [ ] Create `instruments.py` module
-- [ ] Implement `get_all_instruments()` function
+- [x] Create `instruments.py` module
+- [x] Implement `get_all_instruments()` function
   - Endpoint: `GET /userapigateway/trading/instruments`
   - Returns: List of all available instruments
-- [ ] Implement `get_instrument()` function
-  - Endpoint: `GET /userapigateway/trading/instruments/{symbol}`
-  - Parameters: symbol
+- [x] Implement `get_instrument()` function
+  - Endpoint: `GET /userapigateway/trading/instruments/{symbol}/{type}`
+  - Parameters: symbol, type
   - Returns: Instrument details
 
 ### Task 5.2: Implement Market Data Functions
-- [ ] Create `market_data.py` module
-- [ ] Implement `get_quotes()` function
-  - Endpoint: `POST /userapigateway/trading/quotes`
-  - Parameters: List of symbols
+- [x] Create `market_data.py` module
+- [x] Implement `get_quotes()` function
+  - Endpoint: `POST /userapigateway/marketdata/{accountId}/quotes`
+  - Parameters: accountId, List of instruments
   - Returns: List of Quote objects
-- [ ] Implement `get_option_expirations()` function
-  - Endpoint: `POST /userapigateway/trading/options/expirations`
-  - Parameters: symbol
+- [x] Implement `get_option_expirations()` function
+  - Endpoint: `POST /userapigateway/marketdata/{accountId}/option-expirations`
+  - Parameters: accountId, instrument
   - Returns: List of expiration dates
-- [ ] Implement `get_option_chain()` function
-  - Endpoint: `POST /userapigateway/trading/options/chain`
-  - Parameters: symbol, expiration, strike filters
+- [x] Implement `get_option_chain()` function
+  - Endpoint: `POST /userapigateway/marketdata/{accountId}/option-chain`
+  - Parameters: accountId, instrument, expiration date
   - Returns: Option chain data
-- [ ] Implement `get_option_greeks()` function
-  - Endpoint: `GET /userapigateway/trading/options/greeks`
-  - Parameters: option symbol
+- [x] Implement `get_option_greeks()` function
+  - Endpoint: `GET /userapigateway/option-details/{accountId}/{osiOptionSymbol}/greeks`
+  - Parameters: accountId, option symbol
   - Returns: Option Greeks data
 
 ## Phase 6: Order Management Functions
 
 ### Task 6.1: Implement Order Preflight Functions
-- [ ] Create `orders.py` module
-- [ ] Implement `preflight_single_leg()` function
-  - Endpoint: `POST /userapigateway/trading/orders/preflight/single-leg`
-  - Parameters: order details
+- [x] Create `orders.py` module
+- [x] Implement `preflight_single_leg()` function
+  - Endpoint: `POST /userapigateway/trading/{accountId}/preflight/single-leg`
+  - Parameters: accountId, order details
   - Returns: Preflight validation results
-- [ ] Implement `preflight_multi_leg()` function
-  - Endpoint: `POST /userapigateway/trading/orders/preflight/multi-leg`
-  - Parameters: multi-leg order details
+- [x] Implement `preflight_multi_leg()` function
+  - Endpoint: `POST /userapigateway/trading/{accountId}/preflight/multi-leg`
+  - Parameters: accountId, multi-leg order details
   - Returns: Preflight validation results
 
 ### Task 6.2: Implement Order Placement Functions
-- [ ] Implement `place_order()` function
-  - Endpoint: `POST /userapigateway/trading/orders`
-  - Parameters: order details (symbol, quantity, type, side, etc.)
+- [x] Implement `place_order()` function
+  - Endpoint: `POST /userapigateway/trading/{accountId}/order`
+  - Parameters: accountId, order details (symbol, quantity, type, side, etc.)
   - Returns: Order confirmation
-- [ ] Implement `place_multileg_order()` function
-  - Endpoint: `POST /userapigateway/trading/orders/multileg`
-  - Parameters: multi-leg order details
+- [x] Implement `place_multileg_order()` function
+  - Endpoint: `POST /userapigateway/trading/{accountId}/order/multileg`
+  - Parameters: accountId, multi-leg order details
   - Returns: Multi-leg order confirmation
 
 ### Task 6.3: Implement Order Management Functions
-- [ ] Implement `get_order()` function
-  - Endpoint: `GET /userapigateway/trading/orders/{orderId}`
-  - Parameters: orderId
+- [x] Implement `get_order()` function
+  - Endpoint: `GET /userapigateway/trading/{accountId}/order/{orderId}`
+  - Parameters: accountId, orderId
   - Returns: Order details and status
-- [ ] Implement `cancel_order()` function
-  - Endpoint: `DELETE /userapigateway/trading/orders/{orderId}`
-  - Parameters: orderId
+- [x] Implement `cancel_order()` function
+  - Endpoint: `DELETE /userapigateway/trading/{accountId}/order/{orderId}`
+  - Parameters: accountId, orderId
   - Returns: Cancellation confirmation
 
 ## Phase 7: Testing & Documentation
 
 ### Task 7.1: Create Unit Tests (using unittest)
-- [ ] Create `tests/` directory
-- [ ] Create `test_client.py` - Test base client functionality using `unittest.TestCase`
-- [ ] Create `test_auth.py` - Test authentication functions using `unittest.TestCase`
+- [x] Create `tests/` directory
+- [x] Create `test_client.py` - Test base client functionality using `unittest.TestCase`
+- [x] Create `test_auth.py` - Test authentication functions using `unittest.TestCase`
 - [ ] Create `test_accounts.py` - Test account management functions using `unittest.TestCase`
 - [ ] Create `test_instruments.py` - Test instrument functions using `unittest.TestCase`
 - [ ] Create `test_market_data.py` - Test market data functions using `unittest.TestCase`
 - [ ] Create `test_orders.py` - Test order management functions using `unittest.TestCase`
-- [ ] Create mock responses for all API endpoints using `unittest.mock`
-- [ ] Use `unittest.mock.patch` for HTTP request mocking
+- [x] Create mock responses for all API endpoints using `unittest.mock`
+- [x] Use `unittest.mock.patch` for HTTP request mocking
 - [ ] Achieve 90%+ test coverage using `coverage` package
 
 ### Task 7.2: Integration Tests (using unittest)
@@ -183,10 +183,10 @@ Use `python-dotenv` to manage environment variables for API keys and other sensi
 - [ ] Use `unittest.skipIf` to conditionally skip tests when API credentials not available
 
 ### Task 7.3: Documentation
-- [ ] Update `README.md` with comprehensive usage examples
-- [ ] Add docstrings to all public functions and classes
-- [ ] Create `examples/` directory with sample scripts
-- [ ] Document error handling and best practices
+- [x] Update `README.md` with comprehensive usage examples
+- [x] Add docstrings to all public functions and classes
+- [x] Create `examples/` directory with sample scripts
+- [x] Document error handling and best practices
 
 ## Phase 8: Advanced Features & Polish
 
@@ -210,22 +210,22 @@ Use `python-dotenv` to manage environment variables for API keys and other sensi
 
 | # | Endpoint | Method | Function Name | Module | Request Types | Response Types | Status |
 |---|----------|---------|---------------|---------|---------------|----------------|---------|
-| 1 | `/userapiauthservice/personal/access-tokens` | POST | `create_access_token()` | auth.py | `{secret: str, validityInMinutes?: int}` | `{accessToken: str}` | ⏳ |
-| 2 | `/userapigateway/trading/account` | GET | `get_accounts()` | accounts.py | None | `{accounts: Account[]}` | ⏳ |
-| 3 | `/userapigateway/trading/{accountId}/portfolio/v2` | GET | `get_account_portfolio()` | accounts.py | `accountId: str` | `Portfolio` with positions, equity, orders | ⏳ |
-| 4 | `/userapigateway/trading/{accountId}/history` | GET | `get_account_history()` | accounts.py | `accountId: str, start?: datetime, end?: datetime, pageSize?: int, nextToken?: str` | `{transactions: Transaction[], nextToken?: str, start: datetime, end: datetime, pageSize: int}` | ⏳ |
-| 5 | `/userapigateway/trading/instruments` | GET | `get_all_instruments()` | instruments.py | `typeFilter?: str[], tradingFilter?: str[], fractionalTradingFilter?: str[], optionTradingFilter?: str[], optionSpreadTradingFilter?: str[]` | `{instruments: InstrumentWithTrading[]}` | ⏳ |
-| 6 | `/userapigateway/trading/instruments/{symbol}/{type}` | GET | `get_instrument()` | instruments.py | `symbol: str, type: str` | `InstrumentWithTrading` | ⏳ |
-| 7 | `/userapigateway/marketdata/{accountId}/quotes` | POST | `get_quotes()` | market_data.py | `accountId: str, {instruments: Instrument[]}` | `{quotes: Quote[]}` | ⏳ |
-| 8 | `/userapigateway/marketdata/{accountId}/option-expirations` | POST | `get_option_expirations()` | market_data.py | `accountId: str, {instrument: Instrument}` | `{baseSymbol: str, expirations: date[]}` | ⏳ |
-| 9 | `/userapigateway/marketdata/{accountId}/option-chain` | POST | `get_option_chain()` | market_data.py | `accountId: str, {instrument: Instrument, expirationDate: date}` | `{baseSymbol: str, calls: Quote[], puts: Quote[]}` | ⏳ |
-| 10 | `/userapigateway/trading/{accountId}/preflight/single-leg` | POST | `preflight_single_leg()` | orders.py | `accountId: str, SingleLegOrderRequest` | `PreflightResponse` | ⏳ |
-| 11 | `/userapigateway/trading/{accountId}/preflight/multi-leg` | POST | `preflight_multi_leg()` | orders.py | `accountId: str, MultiLegOrderRequest` | `MultiLegPreflightResponse` | ⏳ |
-| 12 | `/userapigateway/trading/{accountId}/order` | POST | `place_order()` | orders.py | `accountId: str, OrderRequest` | `{orderId: uuid}` | ⏳ |
-| 13 | `/userapigateway/trading/{accountId}/order/multileg` | POST | `place_multileg_order()` | orders.py | `accountId: str, MultiLegOrderRequest` | `{orderId: uuid}` | ⏳ |
-| 14 | `/userapigateway/trading/{accountId}/order/{orderId}` | GET | `get_order()` | orders.py | `accountId: str, orderId: uuid` | `OrderDetails` | ⏳ |
-| 15 | `/userapigateway/trading/{accountId}/order/{orderId}` | DELETE | `cancel_order()` | orders.py | `accountId: str, orderId: uuid` | `None (204)` | ⏳ |
-| 16 | `/userapigateway/option-details/{accountId}/{osiOptionSymbol}/greeks` | GET | `get_option_greeks()` | market_data.py | `accountId: str, osiOptionSymbol: str` | `OptionGreeks` | ⏳ |
+| 1 | `/userapiauthservice/personal/access-tokens` | POST | `create_access_token()` | auth.py | `{secret: str, validityInMinutes?: int}` | `{accessToken: str}` | ✅ |
+| 2 | `/userapigateway/trading/account` | GET | `get_accounts()` | accounts.py | None | `{accounts: Account[]}` | ✅ |
+| 3 | `/userapigateway/trading/{accountId}/portfolio/v2` | GET | `get_account_portfolio()` | accounts.py | `accountId: str` | `Portfolio` with positions, equity, orders | ✅ |
+| 4 | `/userapigateway/trading/{accountId}/history` | GET | `get_account_history()` | accounts.py | `accountId: str, start?: datetime, end?: datetime, pageSize?: int, nextToken?: str` | `{transactions: Transaction[], nextToken?: str, start: datetime, end: datetime, pageSize: int}` | ✅ |
+| 5 | `/userapigateway/trading/instruments` | GET | `get_all_instruments()` | instruments.py | `typeFilter?: str[], tradingFilter?: str[], fractionalTradingFilter?: str[], optionTradingFilter?: str[], optionSpreadTradingFilter?: str[]` | `{instruments: InstrumentWithTrading[]}` | ✅ |
+| 6 | `/userapigateway/trading/instruments/{symbol}/{type}` | GET | `get_instrument()` | instruments.py | `symbol: str, type: str` | `InstrumentWithTrading` | ✅ |
+| 7 | `/userapigateway/marketdata/{accountId}/quotes` | POST | `get_quotes()` | market_data.py | `accountId: str, {instruments: Instrument[]}` | `{quotes: Quote[]}` | ✅ |
+| 8 | `/userapigateway/marketdata/{accountId}/option-expirations` | POST | `get_option_expirations()` | market_data.py | `accountId: str, {instrument: Instrument}` | `{baseSymbol: str, expirations: date[]}` | ✅ |
+| 9 | `/userapigateway/marketdata/{accountId}/option-chain` | POST | `get_option_chain()` | market_data.py | `accountId: str, {instrument: Instrument, expirationDate: date}` | `{baseSymbol: str, calls: Quote[], puts: Quote[]}` | ✅ |
+| 10 | `/userapigateway/trading/{accountId}/preflight/single-leg` | POST | `preflight_single_leg()` | orders.py | `accountId: str, SingleLegOrderRequest` | `PreflightResponse` | ✅ |
+| 11 | `/userapigateway/trading/{accountId}/preflight/multi-leg` | POST | `preflight_multi_leg()` | orders.py | `accountId: str, MultiLegOrderRequest` | `MultiLegPreflightResponse` | ✅ |
+| 12 | `/userapigateway/trading/{accountId}/order` | POST | `place_order()` | orders.py | `accountId: str, OrderRequest` | `{orderId: uuid}` | ✅ |
+| 13 | `/userapigateway/trading/{accountId}/order/multileg` | POST | `place_multileg_order()` | orders.py | `accountId: str, MultiLegOrderRequest` | `{orderId: uuid}` | ✅ |
+| 14 | `/userapigateway/trading/{accountId}/order/{orderId}` | GET | `get_order()` | orders.py | `accountId: str, orderId: uuid` | `OrderDetails` | ✅ |
+| 15 | `/userapigateway/trading/{accountId}/order/{orderId}` | DELETE | `cancel_order()` | orders.py | `accountId: str, orderId: uuid` | `None (204)` | ✅ |
+| 16 | `/userapigateway/option-details/{accountId}/{osiOptionSymbol}/greeks` | GET | `get_option_greeks()` | market_data.py | `accountId: str, osiOptionSymbol: str` | `OptionGreeks` | ✅ |
 
 ## Detailed Response Type Definitions
 

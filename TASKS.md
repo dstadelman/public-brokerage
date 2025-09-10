@@ -1,441 +1,212 @@
 # Requirements
 
-Create a python library to execute trades on Public brokerage using the API.
+Create a shell UI for the commands in the `cli.py`.
 
-We need to support all these endpoints:
+In this UI, I can type different commands to interact with the Public Brokerage API.
 
-https://public.com/api/docs/resources/authorization/create-personal-access-token
-https://public.com/api/docs/resources/list-accounts/get-accounts
-https://public.com/api/docs/resources/account-details/get-account-portfolio-v2
-https://public.com/api/docs/resources/account-details/get-history
-https://public.com/api/docs/resources/instrument-details/get-all-instruments
-https://public.com/api/docs/resources/instrument-details/get-instrument
-https://public.com/api/docs/resources/market-data/get-quotes
-https://public.com/api/docs/resources/market-data/get-option-expirations
-https://public.com/api/docs/resources/market-data/get-option-chain
-https://public.com/api/docs/resources/order-placement/preflight-single-leg
-https://public.com/api/docs/resources/order-placement/preflight-multi-leg
-https://public.com/api/docs/resources/order-placement/place-order
-https://public.com/api/docs/resources/order-placement/place-multileg-order
-https://public.com/api/docs/resources/order-placement/get-order
-https://public.com/api/docs/resources/order-placement/cancel-order
-https://public.com/api/docs/resources/option-details/get-option-greeks
+something like
 
-Use the `requests` library to make HTTP requests.
+```bash
+> accounts
 
-Use `pydantic` to create models for request and response data.
+# list accounts
 
-Use `unittest` to create unit tests for the library.
+> set default account 123456
 
-Use `python-dotenv` to manage environment variables for API keys and other sensitive information. Create a `.env.example` file to show what variables are required.
+# default set to account 123456
 
-# TASKS
+> show positions
 
-## Phase 1: Project Setup & Infrastructure
+# show positions for default account 123456
 
-### Task 1.1: Initialize Python Project Structure
-- [x] Create `.gitignore` file with Python project exclusions
-- [x] Create main package directory `public_brokerage/`
-- [x] Create `__init__.py` files for package structure
-- [x] Create `setup.py` or `pyproject.toml` for package configuration
-- [x] Create `requirements.txt` with dependencies
-- [x] Create `.env.example` file with required environment variables
-- [x] Create `README.md` with usage instructions
+> show positions 654321
 
-### Task 1.2: Install Required Dependencies
-- [ ] Install `requests` for HTTP requests
-- [ ] Install `pydantic` for data models
-- [ ] Install `python-dotenv` for environment variable management
-- [ ] Install development dependencies: `black`, `flake8` (unittest is built-in)
+# show positions for account 654321
 
-## Phase 2: Core Infrastructure & Models
+> open_call_spread AAPL 2024-07-19 170 2024-08-16 175 1
 
-### Task 2.1: Create Base Client Class
-- [x] Create `client.py` with base `PublicBrokerageClient` class
-- [x] Implement authentication handling (access token management)
-- [x] Implement base HTTP request methods with error handling
-- [x] Add retry logic and rate limiting
-- [x] Add logging functionality
+# run the background process to open a call spread, BUT do not actually place the orders, just run the preflight. Simulate running all the way to the ASK and then stopping if not filled.
 
-### Task 2.2: Create Pydantic Models for API Responses
-- [x] Create `models/` directory
-- [x] Create `auth.py` - Authentication models (AccessTokenResponse)
-- [x] Create `account.py` - Account models (Account, AccountType, BuyingPower)
-- [x] Create `portfolio.py` - Portfolio models (Portfolio, Position, Equity)
-- [x] Create `instrument.py` - Instrument models (Instrument, InstrumentType)
-- [x] Create `order.py` - Order models (Order, OrderType, OrderStatus, OrderSide)
-- [x] Create `market_data.py` - Market data models (Quote, OptionChain, OptionExpiration)
-- [x] Create `common.py` - Common models and enums
+> open_call_spread AAPL 2024-07-19 170 2024-08-16 175 1 --execute
 
-## Phase 3: Authentication Implementation
+# run the background process to open a call spread, and actually place the orders. Use default max_wait_time of 42 seconds.
 
-### Task 3.1: Implement Authentication Functions
-- [x] Create `auth.py` module
-- [x] Implement `create_access_token()` function
-  - Endpoint: `POST /userapiauthservice/personal/access-tokens`
-  - Parameters: secret, validityInMinutes
-  - Returns: AccessToken
-- [x] Add token caching and refresh logic
-- [x] Add environment variable support for secrets
+> close_call_spread AAPL
 
-## Phase 4: Account Management Functions
+# analyze the current position and the already running background processes.
+# if there is already a background process running to close a call spread for AAPL, do nothing and inform the user.
+# if there are no positions for AAPL, inform the user and do nothing.
+# use logic to split the position into the correct number of background processes to close all the call spreads for AAPL.
+# run the preflight check for each background process, simulating running all the way to the BID and then stopping if not filled.
 
-### Task 4.1: Implement Account List Function
-- [x] Create `accounts.py` module
-- [x] Implement `get_accounts()` function
-  - Endpoint: `GET /userapigateway/trading/account`
-  - Returns: List of Account objects
-- [x] Add error handling for 401/404 responses
+> close_call_spread AAPL --execute
 
-### Task 4.2: Implement Account Details Functions
-- [x] Implement `get_account_portfolio()` function
-  - Endpoint: `GET /userapigateway/trading/{accountId}/portfolio/v2`
-  - Parameters: accountId
-  - Returns: Portfolio object with positions, equity, orders
-- [x] Implement `get_account_history()` function
-  - Endpoint: `GET /userapigateway/trading/{accountId}/history`
-  - Parameters: accountId, date filters
-  - Returns: Account history data
-
-## Phase 5: Instrument and Market Data Functions
-
-### Task 5.1: Implement Instrument Functions
-- [x] Create `instruments.py` module
-- [x] Implement `get_all_instruments()` function
-  - Endpoint: `GET /userapigateway/trading/instruments`
-  - Returns: List of all available instruments
-- [x] Implement `get_instrument()` function
-  - Endpoint: `GET /userapigateway/trading/instruments/{symbol}/{type}`
-  - Parameters: symbol, type
-  - Returns: Instrument details
-
-### Task 5.2: Implement Market Data Functions
-- [x] Create `market_data.py` module
-- [x] Implement `get_quotes()` function
-  - Endpoint: `POST /userapigateway/marketdata/{accountId}/quotes`
-  - Parameters: accountId, List of instruments
-  - Returns: List of Quote objects
-- [x] Implement `get_option_expirations()` function
-  - Endpoint: `POST /userapigateway/marketdata/{accountId}/option-expirations`
-  - Parameters: accountId, instrument
-  - Returns: List of expiration dates
-- [x] Implement `get_option_chain()` function
-  - Endpoint: `POST /userapigateway/marketdata/{accountId}/option-chain`
-  - Parameters: accountId, instrument, expiration date
-  - Returns: Option chain data
-- [x] Implement `get_option_greeks()` function
-  - Endpoint: `GET /userapigateway/option-details/{accountId}/{osiOptionSymbol}/greeks`
-  - Parameters: accountId, option symbol
-  - Returns: Option Greeks data
-
-## Phase 6: Order Management Functions
-
-### Task 6.1: Implement Order Preflight Functions
-- [x] Create `orders.py` module
-- [x] Implement `preflight_single_leg()` function
-  - Endpoint: `POST /userapigateway/trading/{accountId}/preflight/single-leg`
-  - Parameters: accountId, order details
-  - Returns: Preflight validation results
-- [x] Implement `preflight_multi_leg()` function
-  - Endpoint: `POST /userapigateway/trading/{accountId}/preflight/multi-leg`
-  - Parameters: accountId, multi-leg order details
-  - Returns: Preflight validation results
-
-### Task 6.2: Implement Order Placement Functions
-- [x] Implement `place_order()` function
-  - Endpoint: `POST /userapigateway/trading/{accountId}/order`
-  - Parameters: accountId, order details (symbol, quantity, type, side, etc.)
-  - Returns: Order confirmation
-- [x] Implement `place_multileg_order()` function
-  - Endpoint: `POST /userapigateway/trading/{accountId}/order/multileg`
-  - Parameters: accountId, multi-leg order details
-  - Returns: Multi-leg order confirmation
-
-### Task 6.3: Implement Order Management Functions
-- [x] Implement `get_order()` function
-  - Endpoint: `GET /userapigateway/trading/{accountId}/order/{orderId}`
-  - Parameters: accountId, orderId
-  - Returns: Order details and status
-- [x] Implement `cancel_order()` function
-  - Endpoint: `DELETE /userapigateway/trading/{accountId}/order/{orderId}`
-  - Parameters: accountId, orderId
-  - Returns: Cancellation confirmation
-
-## Phase 7: Testing & Documentation
-
-### Task 7.1: Create Unit Tests (using unittest)
-- [x] Create `tests/` directory
-- [x] Create `test_client.py` - Test base client functionality using `unittest.TestCase`
-- [x] Create `test_auth.py` - Test authentication functions using `unittest.TestCase`
-- [ ] Create `test_accounts.py` - Test account management functions using `unittest.TestCase`
-- [ ] Create `test_instruments.py` - Test instrument functions using `unittest.TestCase`
-- [ ] Create `test_market_data.py` - Test market data functions using `unittest.TestCase`
-- [ ] Create `test_orders.py` - Test order management functions using `unittest.TestCase`
-- [x] Create mock responses for all API endpoints using `unittest.mock`
-- [x] Use `unittest.mock.patch` for HTTP request mocking
-- [ ] Achieve 90%+ test coverage using `coverage` package
-
-### Task 7.2: Integration Tests (using unittest)
-- [ ] Create `test_integration.py` with end-to-end tests using `unittest.TestCase` (requires API credentials)
-- [ ] Test complete trading workflows
-- [ ] Test error handling scenarios
-- [ ] Test rate limiting and retry logic
-- [ ] Use `unittest.skipIf` to conditionally skip tests when API credentials not available
-
-### Task 7.3: Documentation
-- [x] Update `README.md` with comprehensive usage examples
-- [x] Add docstrings to all public functions and classes
-- [x] Create `examples/` directory with sample scripts
-- [x] Document error handling and best practices
-
-## Phase 8: Advanced Features & Polish
-
-### Task 8.1: Advanced Features
-- [ ] Add async support with `aiohttp` (optional)
-- [ ] Add WebSocket support for real-time data (if available)
-- [ ] Add portfolio analysis utilities
-- [ ] Add trading strategy helpers
-
-### Task 8.2: Code Quality & CI/CD
-- [ ] Set up GitHub Actions for CI/CD with `python -m unittest discover` for test execution
-- [ ] Add code formatting with `black`
-- [ ] Add linting with `flake8` or `pylint`
-- [ ] Add type checking with `mypy`
-- [ ] Add test coverage reporting with `coverage run -m unittest discover`
-- [ ] Add pre-commit hooks
-
-## Complete API Endpoint Analysis
-
-**✅ ALL 16 ENDPOINTS VERIFIED AND ANALYZED**
-
-| # | Endpoint | Method | Function Name | Module | Request Types | Response Types | Status |
-|---|----------|---------|---------------|---------|---------------|----------------|---------|
-| 1 | `/userapiauthservice/personal/access-tokens` | POST | `create_access_token()` | auth.py | `{secret: str, validityInMinutes?: int}` | `{accessToken: str}` | ✅ |
-| 2 | `/userapigateway/trading/account` | GET | `get_accounts()` | accounts.py | None | `{accounts: Account[]}` | ✅ |
-| 3 | `/userapigateway/trading/{accountId}/portfolio/v2` | GET | `get_account_portfolio()` | accounts.py | `accountId: str` | `Portfolio` with positions, equity, orders | ✅ |
-| 4 | `/userapigateway/trading/{accountId}/history` | GET | `get_account_history()` | accounts.py | `accountId: str, start?: datetime, end?: datetime, pageSize?: int, nextToken?: str` | `{transactions: Transaction[], nextToken?: str, start: datetime, end: datetime, pageSize: int}` | ✅ |
-| 5 | `/userapigateway/trading/instruments` | GET | `get_all_instruments()` | instruments.py | `typeFilter?: str[], tradingFilter?: str[], fractionalTradingFilter?: str[], optionTradingFilter?: str[], optionSpreadTradingFilter?: str[]` | `{instruments: InstrumentWithTrading[]}` | ✅ |
-| 6 | `/userapigateway/trading/instruments/{symbol}/{type}` | GET | `get_instrument()` | instruments.py | `symbol: str, type: str` | `InstrumentWithTrading` | ✅ |
-| 7 | `/userapigateway/marketdata/{accountId}/quotes` | POST | `get_quotes()` | market_data.py | `accountId: str, {instruments: Instrument[]}` | `{quotes: Quote[]}` | ✅ |
-| 8 | `/userapigateway/marketdata/{accountId}/option-expirations` | POST | `get_option_expirations()` | market_data.py | `accountId: str, {instrument: Instrument}` | `{baseSymbol: str, expirations: date[]}` | ✅ |
-| 9 | `/userapigateway/marketdata/{accountId}/option-chain` | POST | `get_option_chain()` | market_data.py | `accountId: str, {instrument: Instrument, expirationDate: date}` | `{baseSymbol: str, calls: Quote[], puts: Quote[]}` | ✅ |
-| 10 | `/userapigateway/trading/{accountId}/preflight/single-leg` | POST | `preflight_single_leg()` | orders.py | `accountId: str, SingleLegOrderRequest` | `PreflightResponse` | ✅ |
-| 11 | `/userapigateway/trading/{accountId}/preflight/multi-leg` | POST | `preflight_multi_leg()` | orders.py | `accountId: str, MultiLegOrderRequest` | `MultiLegPreflightResponse` | ✅ |
-| 12 | `/userapigateway/trading/{accountId}/order` | POST | `place_order()` | orders.py | `accountId: str, OrderRequest` | `{orderId: uuid}` | ✅ |
-| 13 | `/userapigateway/trading/{accountId}/order/multileg` | POST | `place_multileg_order()` | orders.py | `accountId: str, MultiLegOrderRequest` | `{orderId: uuid}` | ✅ |
-| 14 | `/userapigateway/trading/{accountId}/order/{orderId}` | GET | `get_order()` | orders.py | `accountId: str, orderId: uuid` | `OrderDetails` | ✅ |
-| 15 | `/userapigateway/trading/{accountId}/order/{orderId}` | DELETE | `cancel_order()` | orders.py | `accountId: str, orderId: uuid` | `None (204)` | ✅ |
-| 16 | `/userapigateway/option-details/{accountId}/{osiOptionSymbol}/greeks` | GET | `get_option_greeks()` | market_data.py | `accountId: str, osiOptionSymbol: str` | `OptionGreeks` | ✅ |
-
-## Detailed Response Type Definitions
-
-### Core Data Types Found:
-
-**Account Types:**
-```python
-Account = {
-    accountId: str,
-    accountType: "BROKERAGE" | "HIGH_YIELD" | "BOND_ACCOUNT" | "RIA_ASSET" | "TREASURY" | "TRADITIONAL_IRA" | "ROTH_IRA",
-    optionsLevel: "NONE" | ...,
-    brokerageAccountType: "CASH" | ...,
-    tradePermissions: "BUY_AND_SELL" | ...
-}
+# same as above, but actually place the orders.
 ```
 
-**Portfolio Types:**
-```python
-Portfolio = {
-    accountId: str,
-    accountType: AccountType,
-    buyingPower: {
-        cashOnlyBuyingPower: str,
-        buyingPower: str,
-        optionsBuyingPower: str
-    },
-    equity: [{ type: "CASH", value: str, percentageOfPortfolio: str }],
-    positions: Position[],
-    orders: Order[]
-}
+* Automatically log in using the token in the `.env` file.
+* Automatically renew the token if expired.
 
-Position = {
-    instrument: Instrument,
-    quantity: str,
-    openedAt: datetime,
-    currentValue: str,
-    percentOfPortfolio: str,
-    lastPrice: { lastPrice: str, timestamp: datetime },
-    instrumentGain: { gainValue: str, gainPercentage: str, timestamp: datetime },
-    positionDailyGain: { gainValue: str, gainPercentage: str, timestamp: datetime },
-    costBasis: { totalCost: str, unitCost: str, gainValue: str, gainPercentage: str, lastUpdate: datetime }
-}
-```
+* Commands to support:
+    - list accounts
+    - set account as "default" (should automatically set the last command as the default account for future commands and on restart)
+    - show positions for default account (or with specified account id)
+    - show option expirations for a given symbol
+    - show option chain for a given symbol and expiration
+    - open a call spread using walk limit order (runs in background)
+        - args: symbol, short_expiration, short_strike, long_expiration, long_strike, quantity, max_wait_time (optional in seconds, default 42), execute (this is a flag, if not set just run the preflight and show what would be done)
+        - process:
+            - fetch current bid/ask spread for the call spread
+            - divide the bid/ask spread into 20 increments (this is not practical if the bid/ask spread is less than .20, so in this case just use .01 increments, ie however many increments you can fit into the bid/ask spread up to 20)
+            - place a preflight request to confirm the order can be placed
+            - ONLY IF execute is true: place a limit order at the bid price + 1 increment
+                - if not filled in max_wait_time minute:
+                    - cancel the order
+                    - confirm that it was cancelled
+                    - preflight a new limit order at bid price + 2 increments
+                    - only IF execute is true: place a new limit order at the bid price + 2 increments
+            - repeat until filled (or we reach the ask price)
+    - close a call spread using walk limit order (runs in background)
+        - args: symbol, execute (this is a flag, if not set just run the preflight and show what would be done)
+        - optional args: max_wait_time (in seconds)
+        - use the current positions to elucidate the call spreads.
+            - there might be multiple call spreads for the same symbol... so we have to handle this case.
+            - example simple: 1 spread
+                - 2 short call
+                - 2 long call
+                - ANSWER: this can be done in one background process, closing both legs at the same time
+            - example complex: 10 spreads with different strikes
+                - 10 short calls
+                - 5 calls at one strike
+                - 5 calls at another strike
+                - ANSWER: this will have to be split into TWO background processes, closing 5 with one long strike and 5 with another long strike
+        - we use the same walk limit as above, BUT we are trying to SELL the call spread, so we start at the ASK price and walk down to the BID price.
+        
 
-**Transaction Types:**
-```python
-Transaction = {
-    timestamp: datetime,
-    id: str,
-    type: "TRADE" | ...,
-    subType: "DEPOSIT" | ...,
-    accountNumber: str,
-    symbol: str,
-    securityType: "EQUITY" | ...,
-    side: "BUY" | "SELL",
-    description: str,
-    netAmount: str,
-    principalAmount: str,
-    quantity: str,
-    direction: "INCOMING" | "OUTGOING",
-    fees: str
-}
-```
+# Tasks
 
-**Instrument Types:**
-```python
-Instrument = {
-    symbol: str,
-    type: "EQUITY" | "OPTION" | "INDEX" | "MULTI_LEG_INSTRUMENT" | "UNDERLYING_SECURITY_FOR_INDEX_OPTION"
-}
+## Core Shell Infrastructure
+- [ ] Create `shell.py` - Main interactive shell program
+- [ ] Implement persistent session management with user state
+- [ ] Create config file (`~/.public_brokerage_config.json`) for storing default account
+- [ ] Implement automatic authentication with token refresh
+- [ ] Create command parser with support for flags and arguments
+- [ ] Implement command history and auto-completion
+- [ ] Add colored output and formatting for better UX
 
-InstrumentWithTrading = {
-    instrument: Instrument,
-    trading: "BUY_AND_SELL" | "LIQUIDATION_ONLY" | "DISABLED",
-    fractionalTrading: "BUY_AND_SELL" | "LIQUIDATION_ONLY" | "DISABLED",
-    optionTrading: "BUY_AND_SELL" | "LIQUIDATION_ONLY" | "DISABLED",
-    optionSpreadTrading: "BUY_AND_SELL" | "LIQUIDATION_ONLY" | "DISABLED"
-}
-```
+## Basic Commands
+- [ ] Implement `accounts` command - List all available accounts
+- [ ] Implement `set default account <account_id>` command - Set default account for session
+- [ ] Implement `show positions [account_id]` command - Show positions for default or specified account
+- [ ] Implement `show options <symbol>` command - Show option expirations for symbol
+- [ ] Implement `show chain <symbol> <expiration>` command - Show option chain
+- [ ] Implement `quote <symbol>` command - Get real-time quote
+- [ ] Implement `help` command - Show available commands and usage
 
-**Quote Types:**
-```python
-Quote = {
-    instrument: Instrument,
-    outcome: "SUCCESS" | "FAILURE",
-    last: str,
-    lastTimestamp: datetime,
-    bid: str,
-    bidSize: int,
-    bidTimestamp: datetime,
-    ask: str,
-    askSize: int,
-    askTimestamp: datetime,
-    volume: int,
-    openInterest: int
-}
-```
+## Options Position Analysis
+- [ ] Create `position_analyzer.py` - Analyze current positions to identify spreads
+- [ ] Implement spread detection logic for call spreads
+- [ ] Implement spread detection logic for put spreads
+- [ ] Handle complex positions with multiple spreads of same underlying
+- [ ] Create position grouping by underlying symbol and expiration
 
-**Order Types:**
-```python
-OrderRequest = {
-    orderId: uuid,  # Required for deduplication
-    instrument: Instrument,
-    orderSide: "BUY" | "SELL",
-    orderType: "MARKET" | "LIMIT" | "STOP" | "STOP_LIMIT",
-    expiration: { timeInForce: "DAY" | ..., expirationTime?: datetime },
-    quantity?: str,  # Mutually exclusive with amount
-    amount?: str,    # Mutually exclusive with quantity
-    limitPrice?: str,  # Required for LIMIT and STOP_LIMIT
-    stopPrice?: str,   # Required for STOP and STOP_LIMIT
-    openCloseIndicator?: "OPEN" | "CLOSE"  # For options only
-}
+## Walk Limit Order Engine
+- [ ] Create `walk_limit_engine.py` - Background process manager for walk limit orders
+- [ ] Implement bid/ask spread calculation and increment logic
+- [ ] Implement order placement with incremental price walking
+- [ ] Add order monitoring and cancellation logic
+- [ ] Implement retry mechanism with exponential backoff
+- [ ] Add logging and status reporting for background processes
+- [ ] Implement process synchronization to prevent duplicate orders
 
-OrderDetails = {
-    orderId: uuid,
-    instrument: Instrument,
-    createdAt: datetime,
-    type: "MARKET" | "LIMIT" | "STOP" | "STOP_LIMIT",
-    side: "BUY" | "SELL",
-    status: "NEW" | "PARTIALLY_FILLED" | "CANCELLED" | "QUEUED_CANCELLED" | "FILLED" | "REJECTED" | "PENDING_REPLACE" | "PENDING_CANCEL" | "EXPIRED" | "REPLACED",
-    quantity?: str,
-    notionalValue?: str,
-    expiration: { timeInForce: str, expirationTime?: datetime },
-    limitPrice?: str,
-    stopPrice?: str,
-    closedAt?: datetime,
-    openCloseIndicator?: "OPEN" | "CLOSE",
-    filledQuantity?: str,
-    averagePrice?: str,
-    legs?: OrderLeg[],  # For multi-leg orders
-    rejectReason?: str
-}
-```
+## Order Confirmation System
+- [ ] Create `confirmation_card.py` - Display detailed order confirmation cards
+- [ ] Implement spread pricing calculator (bid/ask for the entire spread)
+- [ ] Create option information formatter (strike, expiration, type, Greeks)
+- [ ] Implement real-time market data fetching for confirmation display
+- [ ] Add Greeks data integration from options endpoint
+- [ ] Create interactive confirmation prompt (y/n/details/cancel)
+- [ ] Implement order summary with cost basis and risk analysis
+- [ ] Add market impact estimation and liquidity warnings
 
-**Preflight Types:**
-```python
-PreflightResponse = {
-    instrument: Instrument,
-    cusip: str,
-    rootSymbol: str,
-    rootOptionSymbol: str,
-    estimatedCommission: str,
-    regulatoryFees: {
-        secFee: str,     # SEC fee for sell orders
-        tafFee: str,     # Trading Activity Fee (FINRA)
-        orfFee: str,     # Options Regulatory Fee
-        exchangeFee: str, # Exchange fee for index options
-        occFee: str,     # Options Clearing Corporation Fee
-        catFee: str      # Consolidated Audit Trail Fee
-    },
-    estimatedIndexOptionFee: str,
-    orderValue: str,
-    estimatedQuantity: str,
-    estimatedCost: str,
-    buyingPowerRequirement: str,
-    estimatedProceeds: str,
-    optionDetails?: {
-        baseSymbol: str,
-        type: "CALL" | "PUT",
-        strikePrice: str,
-        optionExpireDate: date
-    },
-    estimatedOrderRebate?: {
-        estimatedOptionRebate: str,
-        optionRebatePercent: int,
-        perContractRebate: str
-    },
-    marginRequirement?: {
-        longMaintenanceRequirement: str,
-        longInitialRequirement: str
-    },
-    marginImpact?: {
-        marginUsageImpact: str,
-        initialMarginRequirement: str
-    },
-    priceIncrement?: {
-        incrementBelow3: str,
-        incrementAbove3: str,
-        currentIncrement: str
-    }
-}
-```
+## Confirmation Card Features
+- [ ] **Opening Spread Confirmation Card:**
+  - [ ] Display underlying symbol and current stock price
+  - [ ] Show short leg: strike, expiration, bid/ask, Greeks (delta, gamma, theta, vega, rho)
+  - [ ] Show long leg: strike, expiration, bid/ask, Greeks (delta, gamma, theta, vega, rho)
+  - [ ] Calculate and display net spread bid/ask prices
+  - [ ] Show maximum profit, maximum loss, and break-even point
+  - [ ] Display net delta, gamma, theta, vega exposure
+  - [ ] Show required buying power and margin impact
+  - [ ] Display estimated commission costs
+  - [ ] Show liquidity indicators (volume, open interest)
+- [ ] **Closing Spread Confirmation Card:**
+  - [ ] Display current position details (quantity, entry price, current P&L)
+  - [ ] Show current bid/ask for closing the spread
+  - [ ] Display current Greeks exposure being closed
+  - [ ] Calculate closing cost/credit and net P&L impact
+  - [ ] Show time decay impact if holding vs closing
+  - [ ] Display days to expiration and theta burn
+  - [ ] Show impact on overall portfolio Greeks and buying power
+- [ ] **Enhanced Confirmation Features:**
+  - [ ] Add real-time price updates while user reviews
+  - [ ] Implement spread width and risk/reward ratio calculations
+  - [ ] Add volatility analysis and IV rank information
+  - [ ] Show probability of profit based on current market conditions
+  - [ ] Display historical performance of similar spreads
+  - [ ] Add warning alerts for unusual market conditions
+  - [ ] Implement "details" option for extended analysis
 
-**Option Types:**
-```python
-OptionGreeks = {
-    delta: str,              # Price sensitivity to underlying
-    gamma: str,              # Rate of change of delta
-    theta: str,              # Time decay
-    vega: str,               # Volatility sensitivity
-    rho: str,                # Interest rate sensitivity
-    impliedVolatility: str   # Implied volatility forecast
-}
+## Open Call Spread Command
+- [ ] Implement `open_call_spread <symbol> <short_exp> <short_strike> <long_exp> <long_strike> <qty> [--max_wait_time=42] [--execute]`
+- [ ] Create multi-leg order construction for call spreads
+- [ ] Implement preflight validation for spread orders
+- [ ] Add current market data fetching for spread pricing
+- [ ] **Create confirmation card display before execution**
+- [ ] **Fetch and display Greeks for both legs of the spread**
+- [ ] **Show net credit/debit and break-even analysis**
+- [ ] **Implement user confirmation prompt with detailed spread info**
+- [ ] Implement dry-run mode (without --execute flag)
+- [ ] Add background process spawning for order execution (only after confirmation)
+- [ ] Implement real-time status updates during execution
 
-MultiLegOrderRequest = {
-    orderId: uuid,
-    quantity: int,
-    type: "LIMIT",  # Only LIMIT orders allowed for multi-leg
-    limitPrice: str,  # Positive for debit spreads, negative for credit spreads
-    expiration: { timeInForce: str, expirationTime?: datetime },
-    legs: OrderLeg[]  # 2-6 legs, max 1 equity leg
-}
+## Close Call Spread Command  
+- [ ] Implement `close_call_spread <symbol> [--max_wait_time=42] [--execute]`
+- [ ] Create position analysis to identify existing call spreads
+- [ ] Handle multiple spreads for same underlying (split into separate processes)
+- [ ] **Create confirmation card for closing spreads**
+- [ ] **Show current position P&L and closing impact**
+- [ ] **Display current bid/ask for closing the spread**
+- [ ] **Show Greeks changes from closing the position**
+- [ ] **Implement confirmation prompt with closing analysis**
+- [ ] Implement spread closing logic (sell the spread)
+- [ ] Add conflict detection for already running close processes
+- [ ] Implement position validation before closing
+- [ ] Add support for partial closes and complex position scenarios
 
-OrderLeg = {
-    instrument: Instrument,
-    side: "BUY" | "SELL",
-    openCloseIndicator: "OPEN" | "CLOSE",
-    ratioQuantity: int
-}
-```
+## Background Process Management
+- [ ] Create `process_manager.py` - Manage multiple concurrent trading processes
+- [ ] Implement process status tracking and reporting
+- [ ] Add process cancellation and cleanup
+- [ ] Implement process persistence across shell sessions
+- [ ] Add process conflict detection and resolution
+- [ ] Create process logging and audit trail
+- [ ] Implement process timeout and error handling
 
-**Legend:** ⏳ = Pending, ✅ = Complete, ❌ = Failed/Blocked
+## Advanced Features
+- [ ] Add `status` command - Show all running background processes
+- [ ] Add `cancel <process_id>` command - Cancel specific background process
+- [ ] Add `cancel all` command - Cancel all running processes
+- [ ] Implement `logs <process_id>` command - Show process execution logs
+- [ ] Add market hours validation for order placement
+- [ ] Implement position size validation and risk checks
+- [ ] Add support for put spreads (open_put_spread, close_put_spread)
 
+## Error Handling & Validation
+- [ ] Implement comprehensive input validation for all commands
+- [ ] Add market data validation (valid symbols, expirations, strikes)
+- [ ] Implement account balance and buying power checks
+- [ ] Add order size and position limit validation
+- [ ] Create user-friendly error messages and suggestions
+- [ ] Implement graceful handling of API rate limits
+- [ ] Add network connectivity checks and retry logic

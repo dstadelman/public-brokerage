@@ -342,27 +342,36 @@ class WalkLimitEngine:
                             
                             # Wait for fill or timeout with partial fill handling
                             try:
-                                is_complete, filled_qty = self._wait_for_fill_with_partial_handling(process, stop_event, account_id)
+                                is_complete = self._wait_for_fill_with_partial_handling(process, stop_event, account_id)
                             except Exception as fill_error:
                                 self._emergency_stop_process(process, account_id, f"Fill monitoring error: {fill_error}")
                                 return
                             
-                            # Update remaining quantity based on fills
-                            if filled_qty > 0:
-                                process.remaining_quantity -= filled_qty
-                                self.logger.info(f"[PROGRESS] Filled {filled_qty} contracts, {process.remaining_quantity} remaining")
-                            
                             # If completely filled, we're done
-                            if is_complete or process.remaining_quantity <= 0:
+                            if is_complete:
                                 process.status = ProcessStatus.COMPLETED
                                 self.logger.info(f"[SUCCESS] Process {process.process_id} completed successfully - all {process.quantity} contracts filled")
                                 return
                             
-                            # Cancel any unfilled portion and verify cancellation
+                            # Cancel any unfilled portion and get the actual filled quantity
                             if process.last_order_id:
-                                cancel_success = self._cancel_order_with_verification(process, account_id)
-                                if not cancel_success:
-                                    self._emergency_stop_process(process, account_id, f"Failed to cancel order {process.last_order_id}")
+                                try:
+                                    cancel_success, filled_qty = self._cancel_order_with_verification(process, account_id)
+                                    if not cancel_success:
+                                        self.logger.warning(f"[CANCEL] Order {process.last_order_id} could not be cancelled - may have filled during cancel")
+                                    
+                                    # Update remaining quantity based on actual fills from cancel verification
+                                    if filled_qty > 0:
+                                        process.remaining_quantity -= filled_qty
+                                        self.logger.info(f"[PROGRESS] Filled {filled_qty} contracts during timeout/cancel, {process.remaining_quantity} remaining")
+                                    
+                                    # Check if we're now complete after getting filled quantity from cancel
+                                    if process.remaining_quantity <= 0:
+                                        process.status = ProcessStatus.COMPLETED
+                                        self.logger.info(f"[SUCCESS] Process {process.process_id} completed successfully - all {process.quantity} contracts filled")
+                                        return
+                                except Exception as cancel_error:
+                                    self._emergency_stop_process(process, account_id, f"CRITICAL cancellation error: {cancel_error}")
                                     return
                         else:
                             self._emergency_stop_process(process, account_id, "Order placement returned no order ID")
@@ -506,27 +515,36 @@ class WalkLimitEngine:
                             
                             # Wait for fill or timeout with partial fill handling
                             try:
-                                is_complete, filled_qty = self._wait_for_fill_with_partial_handling(process, stop_event, account_id)
+                                is_complete = self._wait_for_fill_with_partial_handling(process, stop_event, account_id)
                             except Exception as fill_error:
                                 self._emergency_stop_process(process, account_id, f"Close spread fill monitoring error: {fill_error}")
                                 return
                             
-                            # Update remaining quantity based on fills
-                            if filled_qty > 0:
-                                process.remaining_quantity -= filled_qty
-                                self.logger.info(f"[PROGRESS] Filled {filled_qty} contracts, {process.remaining_quantity} remaining")
-                            
                             # If completely filled, we're done
-                            if is_complete or process.remaining_quantity <= 0:
+                            if is_complete:
                                 process.status = ProcessStatus.COMPLETED
                                 self.logger.info(f"[SUCCESS] Process {process.process_id} completed successfully - all {process.quantity} contracts filled")
                                 return
                             
-                            # Cancel any unfilled portion and verify cancellation
+                            # Cancel any unfilled portion and get the actual filled quantity
                             if process.last_order_id:
-                                cancel_success = self._cancel_order_with_verification(process, account_id)
-                                if not cancel_success:
-                                    self._emergency_stop_process(process, account_id, f"Failed to cancel close spread order {process.last_order_id}")
+                                try:
+                                    cancel_success, filled_qty = self._cancel_order_with_verification(process, account_id)
+                                    if not cancel_success:
+                                        self.logger.warning(f"[CANCEL] Order {process.last_order_id} could not be cancelled - may have filled during cancel")
+                                    
+                                    # Update remaining quantity based on actual fills from cancel verification
+                                    if filled_qty > 0:
+                                        process.remaining_quantity -= filled_qty
+                                        self.logger.info(f"[PROGRESS] Filled {filled_qty} contracts during timeout/cancel, {process.remaining_quantity} remaining")
+                                    
+                                    # Check if we're now complete after getting filled quantity from cancel
+                                    if process.remaining_quantity <= 0:
+                                        process.status = ProcessStatus.COMPLETED
+                                        self.logger.info(f"[SUCCESS] Process {process.process_id} completed successfully - all {process.quantity} contracts filled")
+                                        return
+                                except Exception as cancel_error:
+                                    self._emergency_stop_process(process, account_id, f"CRITICAL cancellation error: {cancel_error}")
                                     return
                         else:
                             self._emergency_stop_process(process, account_id, "Close spread order placement returned no order ID")
@@ -705,26 +723,22 @@ class WalkLimitEngine:
         except Exception as e:
             self.logger.error(f"Error creating close spread order: {e}")
             return None
-    
 
 
-    
-    def _wait_for_fill_with_partial_handling(self, process: WalkLimitProcess, stop_event: threading.Event, account_id: str) -> tuple[bool, int]:
+    def _wait_for_fill_with_partial_handling(self, process: WalkLimitProcess, stop_event: threading.Event, account_id: str) -> bool:
         """
         Wait for order to fill or timeout, handling partial fills.
         
         Returns:
-            tuple[bool, int]: (is_complete, filled_quantity)
-            - is_complete: True if fully filled, False if partial/unfilled/timeout
-            - filled_quantity: Number of contracts that were filled
+            bool: True if fully filled before timeout, False if partial/unfilled/timeout
         """
         if not process.last_order_id:
-            return False, 0
+            return False
         
         start_time = time.time()
         while time.time() - start_time < process.max_wait_time:
             if stop_event.is_set():
-                return False, 0
+                return False
             
             try:
                 order_status = get_order(self.client, account_id, process.last_order_id)
@@ -734,31 +748,33 @@ class WalkLimitEngine:
                 
                 if order_status.status == 'FILLED':
                     self.logger.info(f"[FILL] Order {process.last_order_id} fully filled: {filled_qty} contracts")
-                    return True, filled_qty  # Complete fill
+                    return True  # Complete fill
                 elif order_status.status == 'PARTIALLY_FILLED':
-                    self.logger.info(f"[PARTIAL] Order {process.last_order_id} partially filled: {filled_qty}/{process.remaining_quantity} contracts")
-                    return False, filled_qty  # Partial fill - continue walking
+                    self.logger.info(f"[PARTIAL] Order {process.last_order_id} partially filled: {filled_qty}/{process.remaining_quantity} contracts - continuing to wait for remainder")
+                    # Continue waiting - don't return yet, let the full timeout run
                 elif order_status.status in ['CANCELLED', 'REJECTED']:
                     self.logger.info(f"[STATUS] Order {process.last_order_id} status: {order_status.status}")
-                    return False, filled_qty  # No more fills possible
+                    return False  # No more fills possible
                     
             except Exception as e:
                 self.logger.error(f"Error checking order status: {e}")
             
             time.sleep(10)  # Wait 10 seconds before next API call to reduce API load
         
-        # Timeout - check final status for any partial fills
+        # Timeout - check final status for any complete fill
         try:
             order_status = get_order(self.client, account_id, process.last_order_id)
             filled_qty = int(float(order_status.filledQuantity)) if hasattr(order_status, 'filledQuantity') and order_status.filledQuantity else 0
-            if filled_qty > 0:
-                self.logger.info(f"[TIMEOUT] Order {process.last_order_id} timeout with partial fill: {filled_qty} contracts")
+            
+            if order_status.status == 'FILLED':
+                self.logger.info(f"[FILL] Order {process.last_order_id} completed just before timeout: {filled_qty} contracts")
+                return True  # Complete fill at the last moment!
             else:
-                self.logger.info(f"[TIMEOUT] Order {process.last_order_id} timeout with no fills")
-            return False, filled_qty
+                self.logger.info(f"[TIMEOUT] Order {process.last_order_id} timeout - will cancel and check fills")
+                return False
         except Exception as e:
             self.logger.error(f"Error checking final order status: {e}")
-            return False, 0
+            return False
 
     def _emergency_stop_process(self, process: WalkLimitProcess, account_id: str, error_msg: str):
         """
@@ -798,15 +814,17 @@ class WalkLimitEngine:
             except Exception as cancel_error:
                 self.logger.error(f"[EMERGENCY] Failed to cancel order {process.last_order_id}: {cancel_error}")
 
-    def _cancel_order_with_verification(self, process: WalkLimitProcess, account_id: str) -> bool:
+    def _cancel_order_with_verification(self, process: WalkLimitProcess, account_id: str) -> tuple[bool, int]:
         """
         Cancel order and verify it was actually cancelled.
         
         Returns:
-            bool: True if successfully cancelled, False otherwise
+            tuple[bool, int]: (cancel_success, filled_quantity)
+            - cancel_success: True if successfully cancelled, False otherwise
+            - filled_quantity: Number of contracts that were filled before/during cancellation
         """
         if not process.last_order_id:
-            return True  # No order to cancel
+            return True, 0  # No order to cancel
             
         try:
             # Send cancel request
@@ -818,16 +836,17 @@ class WalkLimitEngine:
             for attempt in range(max_cancel_checks):
                 try:
                     order_status = get_order(self.client, account_id, process.last_order_id)
+                    filled_qty = int(float(order_status.filledQuantity)) if hasattr(order_status, 'filledQuantity') and order_status.filledQuantity else 0
                     
                     if order_status.status in ['CANCELLED']:
-                        self.logger.info(f"[CANCEL] Order {process.last_order_id} successfully cancelled")
-                        return True
+                        self.logger.info(f"[CANCEL] Order {process.last_order_id} successfully cancelled - filled quantity: {filled_qty}")
+                        return True, filled_qty
                     elif order_status.status in ['FILLED', 'PARTIALLY_FILLED']:
-                        self.logger.warning(f"[CANCEL] Order {process.last_order_id} filled during cancel attempt! Status: {order_status.status}")
-                        return False  # Order filled before we could cancel
+                        self.logger.warning(f"[CANCEL] Order {process.last_order_id} filled during cancel attempt! Status: {order_status.status}, filled: {filled_qty}")
+                        return False, filled_qty  # Order filled before we could cancel
                     elif order_status.status in ['REJECTED']:
-                        self.logger.info(f"[CANCEL] Order {process.last_order_id} was rejected (counts as cancelled)")
-                        return True
+                        self.logger.info(f"[CANCEL] Order {process.last_order_id} was rejected (counts as cancelled) - filled quantity: {filled_qty}")
+                        return True, filled_qty
                     
                     # Still pending cancellation
                     self.logger.debug(f"[CANCEL] Attempt {attempt + 1}: Order {process.last_order_id} status: {order_status.status}")
@@ -837,13 +856,22 @@ class WalkLimitEngine:
                     self.logger.error(f"Error checking cancel status (attempt {attempt + 1}): {e}")
                     time.sleep(1)
             
-            # If we get here, cancel verification timed out
-            self.logger.error(f"[CANCEL] Failed to verify cancellation of order {process.last_order_id} after {max_cancel_checks} attempts")
-            return False
+            # If we get here, cancel verification timed out - CRITICAL ERROR
+            try:
+                order_status = get_order(self.client, account_id, process.last_order_id)
+                filled_qty = int(float(order_status.filledQuantity)) if hasattr(order_status, 'filledQuantity') and order_status.filledQuantity else 0
+                self.logger.error(f"[CANCEL] CRITICAL: Failed to verify cancellation of order {process.last_order_id} after {max_cancel_checks} attempts - final filled quantity: {filled_qty}")
+                # This is a critical race condition - we don't know if order is cancelled or not
+                raise Exception(f"CRITICAL: Cannot verify cancellation status of order {process.last_order_id} - race condition risk! Final filled: {filled_qty}")
+            except Exception as e:
+                self.logger.error(f"[CANCEL] CRITICAL: Could not get final status for order {process.last_order_id}: {e}")
+                # This is a critical race condition - we have no idea what happened
+                raise Exception(f"CRITICAL: Cannot determine order status for {process.last_order_id} during cancellation - race condition risk! Error: {e}")
             
         except Exception as e:
-            self.logger.error(f"Error cancelling order {process.last_order_id}: {e}")
-            return False
+            self.logger.error(f"CRITICAL: Error cancelling order {process.last_order_id}: {e}")
+            # This is a critical race condition - we couldn't even attempt cancellation
+            raise Exception(f"CRITICAL: Failed to cancel order {process.last_order_id} - race condition risk! Error: {e}")
 
     def _wait_for_fill(self, process: WalkLimitProcess, stop_event: threading.Event, account_id: str) -> bool:
         """Wait for order to fill or timeout."""

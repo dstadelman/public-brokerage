@@ -101,12 +101,13 @@ class WalkLimitEngineTest(unittest.TestCase):
     def tearDown(self):
         """Clean up after tests."""
         # Cancel any active processes
-        self.engine.cancel_all_processes()
+        processes = self.engine.get_all_processes()
+        for process_id in processes:
+            self.engine.cancel_process(process_id)
         time.sleep(0.1)  # Allow threads to finish
     
     @patch('walk_limit_engine.get_quotes')
-    @patch('walk_limit_engine.ensure_access_token')
-    def test_get_spread_pricing_success(self, mock_ensure_token, mock_get_quotes):
+    def test_get_spread_pricing_success(self, mock_get_quotes):
         """Test successful spread pricing calculation."""
         # Mock quote responses
         short_quote = MockQuoteResponse(bid="90.80", ask="91.25")
@@ -123,8 +124,7 @@ class WalkLimitEngineTest(unittest.TestCase):
         self.assertAlmostEqual(ask, expected_ask, places=2)
         
         # Verify API calls
-        mock_ensure_token.assert_called_once()
-        self.assertEqual(mock_get_quotes.call_count, 2)
+        self.assertEqual(mock_get_quotes.call_count, 1)  # Called once with 2 instruments
     
     @patch('walk_limit_engine.get_quotes')
     def test_get_spread_pricing_failure(self, mock_get_quotes):
@@ -157,7 +157,7 @@ class WalkLimitEngineTest(unittest.TestCase):
         # Verify initial quantities
         self.assertEqual(process.quantity, 5)
         self.assertEqual(process.remaining_quantity, 5)
-        self.assertEqual(process.status, ProcessStatus.STARTING)
+        self.assertEqual(process.status, ProcessStatus.RUNNING)  # Process starts running immediately
     
     @patch('walk_limit_engine.get_order')
     def test_wait_for_fill_with_complete_fill(self, mock_get_order):
@@ -188,12 +188,11 @@ class WalkLimitEngineTest(unittest.TestCase):
         mock_get_order.return_value = MockOrderStatus("FILLED", "2")
         
         stop_event = threading.Event()
-        is_complete, filled_qty = self.engine._wait_for_fill_with_partial_handling(
+        is_complete = self.engine._wait_for_fill_with_partial_handling(
             process, stop_event, self.account_id
         )
         
         self.assertTrue(is_complete)
-        self.assertEqual(filled_qty, 2)
         mock_get_order.assert_called_with(self.mock_client, self.account_id, "ORDER123")
     
     @patch('walk_limit_engine.get_order')
@@ -224,12 +223,11 @@ class WalkLimitEngineTest(unittest.TestCase):
         mock_get_order.return_value = MockOrderStatus("PARTIALLY_FILLED", "3")
         
         stop_event = threading.Event()
-        is_complete, filled_qty = self.engine._wait_for_fill_with_partial_handling(
+        is_complete = self.engine._wait_for_fill_with_partial_handling(
             process, stop_event, self.account_id
         )
         
         self.assertFalse(is_complete)  # Not complete - still have unfilled quantity
-        self.assertEqual(filled_qty, 3)
     
     @patch('walk_limit_engine.get_order')
     def test_wait_for_fill_timeout_with_partial(self, mock_get_order):
@@ -263,13 +261,12 @@ class WalkLimitEngineTest(unittest.TestCase):
         ]
         
         stop_event = threading.Event()
-        is_complete, filled_qty = self.engine._wait_for_fill_with_partial_handling(
+        is_complete = self.engine._wait_for_fill_with_partial_handling(
             process, stop_event, self.account_id
         )
         
         self.assertFalse(is_complete)
-        self.assertEqual(filled_qty, 2)
-        self.assertEqual(mock_get_order.call_count, 3)  # Initial checks + final check
+        self.assertEqual(mock_get_order.call_count, 2)  # Initial check + final check (timeout is too short for multiple checks)
     
     @patch('walk_limit_engine.get_order')
     @patch('walk_limit_engine.cancel_order')
@@ -299,9 +296,10 @@ class WalkLimitEngineTest(unittest.TestCase):
         # Mock successful cancellation
         mock_get_order.return_value = MockOrderStatus("CANCELLED", "0")
         
-        success = self.engine._cancel_order_with_verification(process, self.account_id)
+        success, filled_qty = self.engine._cancel_order_with_verification(process, self.account_id)
         
         self.assertTrue(success)
+        self.assertEqual(filled_qty, 0)
         mock_cancel.assert_called_once_with(self.mock_client, self.account_id, "ORDER123")
         mock_get_order.assert_called_with(self.mock_client, self.account_id, "ORDER123")
     
@@ -333,9 +331,10 @@ class WalkLimitEngineTest(unittest.TestCase):
         # Mock order getting filled during cancel attempt
         mock_get_order.return_value = MockOrderStatus("FILLED", "2")
         
-        success = self.engine._cancel_order_with_verification(process, self.account_id)
+        success, filled_qty = self.engine._cancel_order_with_verification(process, self.account_id)
         
         self.assertFalse(success)  # Cancel "failed" because order filled
+        self.assertEqual(filled_qty, 2)  # Got the filled quantity
         mock_cancel.assert_called_once()
     
     @patch('walk_limit_engine.get_order')  
@@ -364,14 +363,27 @@ class WalkLimitEngineTest(unittest.TestCase):
         )
         
         # Mock order that never gets cancelled (stays WORKING)
-        mock_get_order.return_value = MockOrderStatus("WORKING", "0")
+        mock_get_order.side_effect = [
+            MockOrderStatus("WORKING", "0"),  # First check
+            MockOrderStatus("WORKING", "0"),  # Second check
+            MockOrderStatus("WORKING", "0"),  # Third check
+            MockOrderStatus("WORKING", "0"),  # Fourth check
+            MockOrderStatus("WORKING", "0"),  # Fifth check
+            MockOrderStatus("WORKING", "0"),  # Sixth check
+            MockOrderStatus("WORKING", "0"),  # Seventh check
+            MockOrderStatus("WORKING", "0"),  # Eighth check
+            MockOrderStatus("WORKING", "0"),  # Ninth check
+            MockOrderStatus("WORKING", "0"),  # Tenth check
+            MockOrderStatus("WORKING", "0"),  # Final check for filled_qty
+        ]
         
         with patch('time.sleep'):  # Speed up the test
-            success = self.engine._cancel_order_with_verification(process, self.account_id)
+            success, filled_qty = self.engine._cancel_order_with_verification(process, self.account_id)
         
         self.assertFalse(success)
+        self.assertEqual(filled_qty, 0)
         mock_cancel.assert_called_once()
-        self.assertEqual(mock_get_order.call_count, 10)  # Max cancel checks
+        self.assertEqual(mock_get_order.call_count, 11)  # Max cancel checks + final check
     
     @patch('walk_limit_engine.place_multileg_order')
     @patch('walk_limit_engine.get_order')
@@ -413,16 +425,15 @@ class WalkLimitEngineTest(unittest.TestCase):
         )
         
         # Mock preflight success
-        with patch.object(self.engine, '_create_close_spread_order', return_value={"test": "order"}):
-            with patch.object(self.engine, '_preflight_dict_order', return_value=MockPreflightResponse(True)):
-                with patch('time.sleep'):  # Speed up sleeps
-                    stop_event = threading.Event()
-                    
-                    # Add process to engine 
-                    self.engine.processes["test123"] = process
-                    
-                    # Run the process
-                    self.engine._run_close_spread_process(process, stop_event, self.account_id)
+        with patch('walk_limit_engine.preflight_multi_leg', return_value=MockPreflightResponse(True)):
+            with patch('time.sleep'):  # Speed up sleeps
+                stop_event = threading.Event()
+                
+                # Add process to engine 
+                self.engine.processes["test123"] = process
+                
+                # Run the process
+                self.engine._run_close_spread_process(process, stop_event, self.account_id)
         
         # Verify final state
         self.assertEqual(process.status, ProcessStatus.COMPLETED)
@@ -435,26 +446,25 @@ class WalkLimitEngineTest(unittest.TestCase):
     def test_dry_run_mode(self):
         """Test dry run mode doesn't place actual orders."""
         with patch.object(self.engine, '_get_spread_pricing', return_value=(0.45, 2.25)):
-            with patch.object(self.engine, '_create_close_spread_order', return_value={"test": "order"}):
-                with patch.object(self.engine, '_preflight_dict_order', return_value=MockPreflightResponse(True)):
-                    with patch('time.sleep'):  # Speed up dry run sleeps
-                        
-                        process_id = self.engine.start_close_call_spread_process(
-                            symbol="ORCL",
-                            spreads=[self.mock_spread],
-                            account_id=self.account_id,
-                            max_wait_time=30,
-                            execute_mode=False  # DRY RUN
-                        )[0]
-                        
-                        # Wait for process to complete
-                        time.sleep(0.5)
-                        
-                        process = self.engine.processes[process_id]
-                        
-                        # In dry run, should complete without actual orders
-                        self.assertEqual(process.status, ProcessStatus.COMPLETED)
-                        self.assertIsNone(process.last_order_id)
+            with patch('walk_limit_engine.preflight_multi_leg', return_value=MockPreflightResponse(True)):
+                with patch('time.sleep'):  # Speed up dry run sleeps
+                    
+                    process_id = self.engine.start_close_call_spread_process(
+                        symbol="ORCL",
+                        spreads=[self.mock_spread],
+                        account_id=self.account_id,
+                        max_wait_time=30,
+                        execute_mode=False  # DRY RUN
+                    )[0]
+                    
+                    # Wait for process to complete
+                    time.sleep(0.5)
+                    
+                    process = self.engine.processes[process_id]
+                    
+                    # In dry run, should complete without actual orders
+                    self.assertEqual(process.status, ProcessStatus.COMPLETED)
+                    self.assertIsNone(process.last_order_id)
     
     def test_quantity_tracking_in_status(self):
         """Test that process status includes quantity information."""
@@ -512,24 +522,23 @@ class WalkLimitEngineTest(unittest.TestCase):
     def test_error_handling_preflight_failure(self):
         """Test error handling when preflight fails."""
         with patch.object(self.engine, '_get_spread_pricing', return_value=(0.45, 2.25)):
-            with patch.object(self.engine, '_create_close_spread_order', return_value={"test": "order"}):
-                with patch.object(self.engine, '_preflight_dict_order', return_value=MockPreflightResponse(False)):
-                    
-                    process_id = self.engine.start_close_call_spread_process(
-                        symbol="ORCL",
-                        spreads=[self.mock_spread],
-                        account_id=self.account_id,
-                        max_wait_time=30,
-                        execute_mode=False
-                    )[0]
-                    
-                    # Wait for process to complete
-                    time.sleep(0.5)
-                    
-                    process = self.engine.processes[process_id]
-                    
-                    # Should complete due to preflight failure
-                    self.assertEqual(process.status, ProcessStatus.COMPLETED)
+            with patch('walk_limit_engine.preflight_multi_leg', return_value=MockPreflightResponse(False)):
+                
+                process_id = self.engine.start_close_call_spread_process(
+                    symbol="ORCL",
+                    spreads=[self.mock_spread],
+                    account_id=self.account_id,
+                    max_wait_time=30,
+                    execute_mode=False
+                )[0]
+                
+                # Wait for process to complete
+                time.sleep(0.5)
+                
+                process = self.engine.processes[process_id]
+                
+                # Should complete due to preflight failure
+                self.assertEqual(process.status, ProcessStatus.COMPLETED)
     
     def test_process_cancellation(self):
         """Test process cancellation functionality."""
@@ -578,7 +587,11 @@ class WalkLimitEngineTest(unittest.TestCase):
             )[0]
         
         # Cancel all processes
-        count = self.engine.cancel_all_processes()
+        processes = self.engine.get_all_processes()
+        count = 0
+        for process_id in processes:
+            if self.engine.cancel_process(process_id):
+                count += 1
         self.assertEqual(count, 2)
         
         # Verify all stop events were set

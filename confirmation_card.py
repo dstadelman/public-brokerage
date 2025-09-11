@@ -88,8 +88,14 @@ class ConfirmationCard:
             print("\n🟢 LONG LEG:")
             self._display_option_leg(long_chain, "BUY", quantity)
             
-            # Calculate spread pricing
-            spread_bid, spread_ask = self._calculate_spread_pricing(short_chain, long_chain)
+            # Calculate spread pricing - for opening a debit call spread
+            # We buy the long option (pay ask) and sell the short option (receive bid)
+            # Net debit = long_ask - short_bid (what we pay)
+            # Net credit = long_bid - short_ask (best case scenario)
+            spread_bid = long_chain['bid'] - short_chain['ask']  # Best price we could get
+            spread_ask = long_chain['ask'] - short_chain['bid']  # Worst price we'd pay
+            spread_bid = max(spread_bid, 0.0)
+            spread_ask = max(spread_ask, 0.0)
             spread_mid = (spread_bid + spread_ask) / 2
             
             print("\n💰 SPREAD PRICING:")
@@ -125,10 +131,11 @@ class ConfirmationCard:
             
             # Display execution details
             print(f"\n⚙️  EXECUTION DETAILS:")
+            print(f"   Mode: DRY RUN (simulation only)")
             print(f"   Strategy: Walk Limit Order")
             print(f"   Starting Price: ${spread_bid:.2f}")
             print(f"   Max Wait Time: {max_wait_time} seconds per increment")
-            print(f"   Est. Commission: $2.10 (2 legs × $0.65 + $0.80 base)")
+            print(f"   Commission: Will be calculated in preflight")
             
             # Days to expiration
             try:
@@ -347,15 +354,7 @@ class ConfirmationCard:
         print(f"   Open Interest: {option_data['openInterest']:,}")
         print(f"   IV: {option_data['impliedVolatility']:.1%}")
     
-    def _calculate_spread_pricing(self, short_option: Dict, long_option: Dict) -> Tuple[float, float]:
-        """Calculate bid/ask pricing for the spread."""
-        # For opening a call spread (sell short, buy long):
-        # Spread bid = short_bid - long_ask (worst case for us)
-        # Spread ask = short_ask - long_bid (best case for us)
-        spread_bid = short_option['bid'] - long_option['ask']
-        spread_ask = short_option['ask'] - long_option['bid']
-        
-        return max(spread_bid, 0.0), max(spread_ask, 0.0)
+
     
     def _display_spread_greeks(self, short_option: Dict, long_option: Dict, quantity: int, account_id: str) -> None:
         """Display net Greeks for the spread."""
@@ -365,11 +364,21 @@ class ConfirmationCard:
             long_greeks = self._get_option_greeks(long_option['symbol'], account_id)
             
             if short_greeks and long_greeks:
-                # Calculate net Greeks (short position is negative)
-                net_delta = (-short_greeks.delta + long_greeks.delta) * quantity
-                net_gamma = (-short_greeks.gamma + long_greeks.gamma) * quantity
-                net_theta = (-short_greeks.theta + long_greeks.theta) * quantity
-                net_vega = (-short_greeks.vega + long_greeks.vega) * quantity
+                # Convert to float and calculate net Greeks (short position is negative)
+                short_delta = float(short_greeks.delta) if short_greeks.delta else 0.0
+                short_gamma = float(short_greeks.gamma) if short_greeks.gamma else 0.0
+                short_theta = float(short_greeks.theta) if short_greeks.theta else 0.0
+                short_vega = float(short_greeks.vega) if short_greeks.vega else 0.0
+                
+                long_delta = float(long_greeks.delta) if long_greeks.delta else 0.0
+                long_gamma = float(long_greeks.gamma) if long_greeks.gamma else 0.0
+                long_theta = float(long_greeks.theta) if long_greeks.theta else 0.0
+                long_vega = float(long_greeks.vega) if long_greeks.vega else 0.0
+                
+                net_delta = (-short_delta + long_delta) * quantity
+                net_gamma = (-short_gamma + long_gamma) * quantity
+                net_theta = (-short_theta + long_theta) * quantity
+                net_vega = (-short_vega + long_vega) * quantity
                 
                 print(f"\n🔢 NET GREEKS (for {quantity} spreads):")
                 print(f"   Delta: {net_delta:.3f}")

@@ -16,7 +16,8 @@ from public_brokerage.client import PublicBrokerageClient
 from public_brokerage.orders import (
     preflight_multi_leg, place_multileg_order, get_order, cancel_order
 )
-from public_brokerage.models.order import MultiLegOrderRequest, OrderLeg, OrderType, MultiLegPreflightResponse
+from public_brokerage.auth import ensure_access_token
+from public_brokerage.models.order import MultiLegOrderRequest, MultiLegPreflightRequest, OrderLeg, OrderType, MultiLegPreflightResponse, OrderResponse
 from public_brokerage.models.common import OrderSide, OpenCloseIndicator, InstrumentType, Instrument, Expiration, TimeInForce
 from public_brokerage.auth import ensure_access_token
 from public_brokerage.market_data import get_quotes
@@ -280,13 +281,24 @@ class WalkLimitEngine:
                     break
                 
                 # Create and preflight order
-                order_request = self._create_open_spread_order(process, account_id)
-                if not order_request:
-                    self.logger.error(f"Failed to create order for process {process.process_id}")
+                preflight_request = self._create_open_spread_preflight(process, account_id)
+                if not preflight_request:
+                    self.logger.error(f"Failed to create preflight for process {process.process_id}")
                     break
                 
+                # Print preflight details - handle Pydantic model format
+                if isinstance(preflight_request, MultiLegPreflightRequest):
+                    limit_price = float(preflight_request.limitPrice)
+                    legs = preflight_request.legs
+                    quantity = preflight_request.quantity
+                    self.logger.info(f"[PREFLIGHT] Preflight details: {len(legs)} legs, quantity: {quantity}, limit: ${limit_price:.2f}")
+                    for i, leg in enumerate(legs):
+                        side_str = leg.side if isinstance(leg.side, str) else leg.side.value
+                        open_str = leg.openCloseIndicator if isinstance(leg.openCloseIndicator, str) else leg.openCloseIndicator.value
+                        self.logger.info(f"   Leg {i+1}: {side_str} {leg.ratioQuantity} {leg.instrument.symbol} ({open_str})")
+                
                 # Preflight the order
-                preflight_result = preflight_multi_leg(self.client, account_id, order_request)
+                preflight_result = preflight_multi_leg(self.client, account_id, preflight_request)
                 
                 if preflight_result is None or hasattr(preflight_result, 'errorMessage'):
                     error_msg = getattr(preflight_result, 'errorMessage', 'Unknown error') if preflight_result else 'API request failed'
@@ -295,7 +307,23 @@ class WalkLimitEngine:
                 
                 self.logger.info(f"Preflight successful for process {process.process_id} at ${process.current_price:.2f}")
                 
+                # Log preflight response details
+                if hasattr(preflight_result, 'estimatedCommission'):
+                    self.logger.info(f"[PREFLIGHT] Commission: ${preflight_result.estimatedCommission}")
+                if hasattr(preflight_result, 'orderValue'):
+                    self.logger.info(f"[PREFLIGHT] Order Value: ${preflight_result.orderValue}")
+                if hasattr(preflight_result, 'buyingPowerRequirement'):
+                    self.logger.info(f"[PREFLIGHT] Buying Power Required: ${preflight_result.buyingPowerRequirement}")
+                
                 if process.execute_mode:
+                    # Create actual order request (different from preflight)
+                    import uuid
+                    order_id = str(uuid.uuid4())
+                    order_request = self._create_open_spread_order(process, account_id, order_id)
+                    if not order_request:
+                        self.logger.error(f"Failed to create order for process {process.process_id}")
+                        break
+                    
                     # Place the actual order using remaining quantity
                     order_response = place_multileg_order(self.client, account_id, order_request)
                     if order_response.ok:
@@ -363,37 +391,27 @@ class WalkLimitEngine:
                 
                 # Create and preflight order
                 self.logger.info(f"[ATTEMPT] Attempt {process.attempts + 1}/{process.max_attempts}: Testing order at ${process.current_price:.2f}")
-                order_request = self._create_close_spread_order(process, account_id)
-                if not order_request:
-                    self.logger.error(f"Failed to create order for process {process.process_id}")
+                preflight_request = self._create_close_spread_preflight(process, account_id)
+                if not preflight_request:
+                    self.logger.error(f"Failed to create preflight for process {process.process_id}")
                     break
                 
-                # Print order details - handle dict format
-                if isinstance(order_request, dict):
-                    limit_price = float(order_request.get('limitPrice', 0))
-                    legs = order_request.get('legs', [])
-                    quantity = order_request.get('quantity', 0)
-                    self.logger.info(f"[ORDER] Order details: {len(legs)} legs, quantity: {quantity}, limit: ${limit_price:.2f}")
+                # Print preflight details - handle Pydantic model format
+                if isinstance(preflight_request, MultiLegPreflightRequest):
+                    limit_price = float(preflight_request.limitPrice)
+                    legs = preflight_request.legs
+                    quantity = preflight_request.quantity
+                    self.logger.info(f"[PREFLIGHT] Preflight details: {len(legs)} legs, quantity: {quantity}, limit: ${limit_price:.2f}")
                     for i, leg in enumerate(legs):
-                        side = leg.get('side', 'UNKNOWN')
-                        ratio = leg.get('ratioQuantity', 0)
-                        symbol = leg.get('instrument', {}).get('symbol', 'UNKNOWN')
-                        close_indicator = leg.get('openCloseIndicator', 'UNKNOWN')
-                        self.logger.info(f"   Leg {i+1}: {side} {ratio} {symbol} ({close_indicator})")
-                else:
-                    # Handle MultiLegOrderRequest object format
-                    limit_price = float(order_request.limitPrice) if isinstance(order_request.limitPrice, str) else order_request.limitPrice
-                    self.logger.info(f"[ORDER] Order details: {len(order_request.legs)} legs, quantity: {order_request.quantity}, limit: ${limit_price:.2f}")
-                    for i, leg in enumerate(order_request.legs):
                         side_str = leg.side if isinstance(leg.side, str) else leg.side.value
                         close_str = leg.openCloseIndicator if isinstance(leg.openCloseIndicator, str) else leg.openCloseIndicator.value
                         self.logger.info(f"   Leg {i+1}: {side_str} {leg.ratioQuantity} {leg.instrument.symbol} ({close_str})")
                 
-                # Debug: Log the order request data
-                self.logger.info(f"[DEBUG] Order request data: {order_request}")
+                # Debug: Log the preflight request data
+                self.logger.info(f"[DEBUG] Preflight request data: {preflight_request}")
                 
-                # Preflight the order - make direct API call since we have dict format
-                preflight_result = self._preflight_dict_order(account_id, order_request)
+                # Preflight the order
+                preflight_result = preflight_multi_leg(self.client, account_id, preflight_request)
                 
                 if preflight_result is None or hasattr(preflight_result, 'errorMessage'):
                     error_msg = getattr(preflight_result, 'errorMessage', 'Unknown error') if preflight_result else 'API request failed'
@@ -445,6 +463,14 @@ class WalkLimitEngine:
                 self.logger.info(f"[PREFLIGHT] SUMMARY: Cost=${cost}, Proceeds=${proceeds}, Commission=${commission}")
                 
                 if process.execute_mode:
+                    # Create actual order request (different from preflight)
+                    import uuid
+                    order_id = str(uuid.uuid4())
+                    order_request = self._create_close_spread_order(process, account_id, order_id)
+                    if not order_request:
+                        self.logger.error(f"Failed to create order for process {process.process_id}")
+                        break
+                    
                     # Place the actual order using remaining quantity
                     order_response = place_multileg_order(self.client, account_id, order_request)
                     if order_response.ok:
@@ -492,10 +518,10 @@ class WalkLimitEngine:
             self.logger.error(f"Error in close spread process {process.process_id}: {e}")
             process.status = ProcessStatus.ERROR
     
-    def _create_open_spread_order(self, process: WalkLimitProcess, account_id: str) -> Optional[MultiLegOrderRequest]:
-        """Create multi-leg order for opening a spread using rPublic.R pattern."""
+    def _create_open_spread_preflight(self, process: WalkLimitProcess, account_id: str) -> Optional[MultiLegPreflightRequest]:
+        """Create multi-leg preflight request for opening a spread."""
         try:
-            # Create legs following the rPublic.R pattern
+            # Create legs following the Pydantic pattern
             legs = []
             
             # Short leg (sell call)
@@ -503,7 +529,7 @@ class WalkLimitEngine:
                 instrument=Instrument(symbol=process.short_symbol, type=InstrumentType.OPTION),
                 side=OrderSide.SELL,
                 openCloseIndicator=OpenCloseIndicator.OPEN,
-                ratioQuantity=process.remaining_quantity  # Use remaining quantity for partial fills
+                ratioQuantity=1  # Always 1 for ratio
             )
             legs.append(short_leg)
             
@@ -512,16 +538,54 @@ class WalkLimitEngine:
                 instrument=Instrument(symbol=process.long_symbol, type=InstrumentType.OPTION),
                 side=OrderSide.BUY,
                 openCloseIndicator=OpenCloseIndicator.OPEN,
-                ratioQuantity=process.remaining_quantity  # Use remaining quantity for partial fills
+                ratioQuantity=1  # Always 1 for ratio
             )
             legs.append(long_leg)
             
-            # Create multi-leg order with proper expiration and required fields
+            # Create preflight request (uses orderType, str quantity, no orderId)
+            expiration = Expiration(timeInForce=TimeInForce.DAY)
+            return MultiLegPreflightRequest(
+                quantity=str(process.remaining_quantity),  # str for preflight
+                orderType=OrderType.LIMIT,  # orderType for preflight
+                limitPrice=str(process.current_price),
+                expiration=expiration,
+                legs=legs
+            )
+            
+        except Exception as e:
+            self.logger.error(f"Error creating open spread preflight: {e}")
+            return None
+    
+    def _create_open_spread_order(self, process: WalkLimitProcess, account_id: str, order_id: str) -> Optional[MultiLegOrderRequest]:
+        """Create multi-leg order for opening a spread."""
+        try:
+            # Create legs following the Pydantic pattern
+            legs = []
+            
+            # Short leg (sell call)
+            short_leg = OrderLeg(
+                instrument=Instrument(symbol=process.short_symbol, type=InstrumentType.OPTION),
+                side=OrderSide.SELL,
+                openCloseIndicator=OpenCloseIndicator.OPEN,
+                ratioQuantity=1  # Always 1 for ratio
+            )
+            legs.append(short_leg)
+            
+            # Long leg (buy call)
+            long_leg = OrderLeg(
+                instrument=Instrument(symbol=process.long_symbol, type=InstrumentType.OPTION),
+                side=OrderSide.BUY,
+                openCloseIndicator=OpenCloseIndicator.OPEN,
+                ratioQuantity=1  # Always 1 for ratio
+            )
+            legs.append(long_leg)
+            
+            # Create order request (uses type, str quantity, requires orderId)
             expiration = Expiration(timeInForce=TimeInForce.DAY)
             return MultiLegOrderRequest(
-                orderId=None,  # Don't include orderId for preflight
-                quantity=process.remaining_quantity,  # Use remaining quantity for partial fills
-                type=OrderType.LIMIT,
+                orderId=order_id,  # Required for orders
+                quantity=str(process.remaining_quantity),  # str for orders
+                type=OrderType.LIMIT,  # type for orders
                 limitPrice=str(process.current_price),
                 expiration=expiration,
                 legs=legs
@@ -531,76 +595,85 @@ class WalkLimitEngine:
             self.logger.error(f"Error creating open spread order: {e}")
             return None
     
-    def _create_close_spread_order(self, process: WalkLimitProcess, account_id: str) -> Optional[dict]:
-        """Create multi-leg order for closing a spread using correct API format."""
+    def _create_close_spread_preflight(self, process: WalkLimitProcess, account_id: str) -> Optional[MultiLegPreflightRequest]:
+        """Create multi-leg preflight request for closing a spread."""
         try:
-            # Create legs following the API documentation format
+            # Create legs following the Pydantic pattern
             legs = []
             
-            # Short leg (buy to close) - ratio is 1 per spread
-            short_leg = {
-                "instrument": {
-                    "symbol": process.short_symbol,
-                    "type": "OPTION"
-                },
-                "side": "BUY",
-                "openCloseIndicator": "CLOSE",
-                "ratioQuantity": 1  # 1 contract per spread
-            }
+            # Short leg (buy to close)
+            short_leg = OrderLeg(
+                instrument=Instrument(symbol=process.short_symbol, type=InstrumentType.OPTION),
+                side=OrderSide.BUY,
+                openCloseIndicator=OpenCloseIndicator.CLOSE,
+                ratioQuantity=1  # Always 1 for ratio
+            )
             legs.append(short_leg)
             
-            # Long leg (sell to close) - ratio is 1 per spread
-            long_leg = {
-                "instrument": {
-                    "symbol": process.long_symbol,
-                    "type": "OPTION"
-                },
-                "side": "SELL",
-                "openCloseIndicator": "CLOSE",
-                "ratioQuantity": 1  # 1 contract per spread
-            }
+            # Long leg (sell to close)
+            long_leg = OrderLeg(
+                instrument=Instrument(symbol=process.long_symbol, type=InstrumentType.OPTION),
+                side=OrderSide.SELL,
+                openCloseIndicator=OpenCloseIndicator.CLOSE,
+                ratioQuantity=1  # Always 1 for ratio
+            )
             legs.append(long_leg)
             
-            # Create order request in correct API format
-            return {
-                "orderType": "LIMIT",  # Note: orderType not type
-                "expiration": {
-                    "timeInForce": "DAY",
-                    "expirationTime": None  # DAY orders don't need specific time
-                },
-                "quantity": str(process.remaining_quantity),  # Use remaining quantity for partial fills
-                "limitPrice": str(-process.current_price),  # Send NEGATIVE for closing (we want credit)
-                "legs": legs
-            }
+            # Create preflight request (uses orderType, str quantity, no orderId)
+            expiration = Expiration(timeInForce=TimeInForce.DAY)
+            return MultiLegPreflightRequest(
+                quantity=str(process.remaining_quantity),  # str for preflight
+                orderType=OrderType.LIMIT,  # orderType for preflight
+                limitPrice=str(-process.current_price),  # Negative for closing (we want credit)
+                expiration=expiration,
+                legs=legs
+            )
+            
+        except Exception as e:
+            self.logger.error(f"Error creating close spread preflight: {e}")
+            return None
+
+    def _create_close_spread_order(self, process: WalkLimitProcess, account_id: str, order_id: str) -> Optional[MultiLegOrderRequest]:
+        """Create multi-leg order for closing a spread."""
+        try:
+            # Create legs following the Pydantic pattern
+            legs = []
+            
+            # Short leg (buy to close)
+            short_leg = OrderLeg(
+                instrument=Instrument(symbol=process.short_symbol, type=InstrumentType.OPTION),
+                side=OrderSide.BUY,
+                openCloseIndicator=OpenCloseIndicator.CLOSE,
+                ratioQuantity=1  # Always 1 for ratio
+            )
+            legs.append(short_leg)
+            
+            # Long leg (sell to close)
+            long_leg = OrderLeg(
+                instrument=Instrument(symbol=process.long_symbol, type=InstrumentType.OPTION),
+                side=OrderSide.SELL,
+                openCloseIndicator=OpenCloseIndicator.CLOSE,
+                ratioQuantity=1  # Always 1 for ratio
+            )
+            legs.append(long_leg)
+            
+            # Create order request (uses type, int quantity, requires orderId)
+            expiration = Expiration(timeInForce=TimeInForce.DAY)
+            return MultiLegOrderRequest(
+                orderId=order_id,  # Required for orders
+                quantity=process.remaining_quantity,  # int for orders
+                type=OrderType.LIMIT,  # type for orders
+                limitPrice=str(-process.current_price),  # Negative for closing (we want credit)
+                expiration=expiration,
+                legs=legs
+            )
             
         except Exception as e:
             self.logger.error(f"Error creating close spread order: {e}")
             return None
     
-    def _preflight_dict_order(self, account_id: str, order_dict: dict):
-        """Preflight order using dict format directly."""
-        try:
-            # Ensure we have a valid access token
-            ensure_access_token(self.client)
-            
-            # Make the API request
-            response = self.client._make_request(
-                method="POST",
-                endpoint=f"/userapigateway/trading/{account_id}/preflight/multi-leg",
-                data=order_dict
-            )
-            
-            # Parse response
-            return self.client._handle_response(response, MultiLegPreflightResponse)
-            
-        except Exception as e:
-            self.logger.error(f"Preflight request failed: {e}")
-            # Return a mock response for error handling
-            class MockResponse:
-                def __init__(self):
-                    self.ok = False
-                    self.errorMessage = str(e)
-            return MockResponse()
+
+
     
     def _wait_for_fill_with_partial_handling(self, process: WalkLimitProcess, stop_event: threading.Event, account_id: str) -> tuple[bool, int]:
         """

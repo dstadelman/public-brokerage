@@ -2,7 +2,7 @@
 Order models for the Public Brokerage API.
 """
 
-from typing import List, Optional
+from typing import List, Optional, Union
 from pydantic import BaseModel
 from datetime import datetime, date
 from uuid import UUID
@@ -81,11 +81,10 @@ class OrderRequest(BaseModel):
         use_enum_values = True
 
 
-class MultiLegOrderRequest(BaseModel):
-    """Multi-leg order request model."""
-    orderId: str  # UUID string
-    quantity: int
-    type: OrderType  # Only LIMIT allowed
+class MultiLegPreflightRequest(BaseModel):
+    """Multi-leg preflight request model."""
+    orderType: OrderType  # Uses orderType for preflight
+    quantity: str  # String for preflight
     limitPrice: str
     expiration: Expiration
     legs: List[OrderLeg]
@@ -93,6 +92,22 @@ class MultiLegOrderRequest(BaseModel):
     class Config:
         """Pydantic configuration."""
         use_enum_values = True
+        exclude_none = True
+
+
+class MultiLegOrderRequest(BaseModel):
+    """Multi-leg order request model."""
+    orderId: str  # Required for actual orders
+    quantity: int  # int for actual orders
+    type: OrderType  # Uses type for actual orders
+    limitPrice: str
+    expiration: Expiration
+    legs: List[OrderLeg]
+
+    class Config:
+        """Pydantic configuration."""
+        use_enum_values = True
+        exclude_none = True
 
 
 class OrderResponse(BaseModel):

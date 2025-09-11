@@ -745,7 +745,7 @@ class WalkLimitEngine:
             except Exception as e:
                 self.logger.error(f"Error checking order status: {e}")
             
-            time.sleep(1)
+            time.sleep(10)  # Wait 10 seconds before next API call to reduce API load
         
         # Timeout - check final status for any partial fills
         try:

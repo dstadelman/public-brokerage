@@ -713,23 +713,96 @@ Initializing...
                 print(f"{Colors.RED}❌ Invalid date format. Use YYYY-MM-DD (e.g., 2024-01-19){Colors.END}")
                 return
             
+            # Get current quote for the underlying to find ATM
+            current_price = None
+            try:
+                underlying_instrument = Instrument(symbol=symbol.upper(), type=InstrumentType.EQUITY)
+                quotes = get_quotes(self.client, account_id, [underlying_instrument])
+                if quotes and len(quotes) > 0:
+                    quote = quotes[0]
+                    if hasattr(quote, 'last') and quote.last:
+                        current_price = float(quote.last)
+                    elif hasattr(quote, 'bid') and hasattr(quote, 'ask') and quote.bid and quote.ask:
+                        current_price = (float(quote.bid) + float(quote.ask)) / 2
+            except Exception as e:
+                print(f"{Colors.YELLOW}⚠️  Could not get underlying price for ATM marking: {e}{Colors.END}")
+            
             # Get option chain
             chain = get_option_chain(self.client, account_id, instrument, expiration_date)
             
             print(f"\n{Colors.BOLD}⛓️  OPTION CHAIN FOR {symbol.upper()} - {expiration}{Colors.END}")
+            if current_price:
+                print(f"{Colors.BOLD}📈 Underlying Price: ${current_price:.2f}{Colors.END}")
             print("=" * 100)
             
             if not chain.calls and not chain.puts:
                 print(f"{Colors.YELLOW}No options found{Colors.END}")
                 return
             
+            
+            # Helper function to extract strike price from option symbol
+            def extract_strike_from_symbol(option_symbol: str) -> float:
+                """Extract strike price from option symbol (condensed OSI format)."""
+                try:
+                    # Handle condensed format: SYMBOL + YYMMDD + C/P + 8-digit strike
+                    # Find the last C or P in the symbol
+                    call_pos = option_symbol.rfind('C')
+                    put_pos = option_symbol.rfind('P')
+                    
+                    if call_pos == -1 and put_pos == -1:
+                        return None
+                    
+                    # Get position of the option type indicator
+                    type_pos = max(call_pos, put_pos)
+                    
+                    # Extract the 8-digit strike price after the type indicator
+                    if len(option_symbol) >= type_pos + 9:  # Need at least 8 digits after type
+                        strike_str = option_symbol[type_pos + 1:type_pos + 9]
+                        strike_mills = int(strike_str)
+                        return strike_mills / 1000.0
+                    return None
+                except (ValueError, IndexError):
+                    return None
+            
+            # Find ATM strikes if we have current price
+            atm_call_strike = None
+            atm_put_strike = None
+            if current_price:
+                min_call_diff = float('inf')
+                min_put_diff = float('inf')
+                
+                # Find ATM call
+                if chain.calls:
+                    for call in chain.calls:
+                        if call.outcome == "SUCCESS":
+                            strike = extract_strike_from_symbol(call.instrument.symbol)
+                            if strike is not None:
+                                diff = abs(strike - current_price)
+                                if diff < min_call_diff:
+                                    min_call_diff = diff
+                                    atm_call_strike = strike
+                
+                # Find ATM put  
+                if chain.puts:
+                    for put in chain.puts:
+                        if put.outcome == "SUCCESS":
+                            strike = extract_strike_from_symbol(put.instrument.symbol)
+                            if strike is not None:
+                                diff = abs(strike - current_price)
+                                if diff < min_put_diff:
+                                    min_put_diff = diff
+                                    atm_put_strike = strike
+
             # Display calls and puts
             print(f"\n{Colors.BOLD}📞 CALLS{Colors.END}")
             print("-" * 50)
             if chain.calls:
                 for call in chain.calls:
                     if call.outcome == "SUCCESS":
-                        print(f"  {call.instrument.symbol}: Last=${call.last or 'N/A'}, Bid=${call.bid or 'N/A'}, Ask=${call.ask or 'N/A'}")
+                        strike = extract_strike_from_symbol(call.instrument.symbol)
+                        # Mark ATM with star
+                        atm_marker = " ⭐" if (atm_call_strike is not None and strike == atm_call_strike) else ""
+                        print(f"  {call.instrument.symbol}: Last=${call.last or 'N/A'}, Bid=${call.bid or 'N/A'}, Ask=${call.ask or 'N/A'}{atm_marker}")
             else:
                 print("  No calls available")
             
@@ -738,7 +811,10 @@ Initializing...
             if chain.puts:
                 for put in chain.puts:
                     if put.outcome == "SUCCESS":
-                        print(f"  {put.instrument.symbol}: Last=${put.last or 'N/A'}, Bid=${put.bid or 'N/A'}, Ask=${put.ask or 'N/A'}")
+                        strike = extract_strike_from_symbol(put.instrument.symbol)
+                        # Mark ATM with star
+                        atm_marker = " ⭐" if (atm_put_strike is not None and strike == atm_put_strike) else ""
+                        print(f"  {put.instrument.symbol}: Last=${put.last or 'N/A'}, Bid=${put.bid or 'N/A'}, Ask=${put.ask or 'N/A'}{atm_marker}")
             else:
                 print("  No puts available")
         

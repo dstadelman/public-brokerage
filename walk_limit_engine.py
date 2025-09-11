@@ -276,7 +276,7 @@ class WalkLimitEngine:
                     return
                 
                 # Check if we've reached target
-                if process.current_price >= process.target_price:
+                if process.current_price > process.target_price:
                     self.logger.info(f"Process {process.process_id} reached target price")
                     break
                 
@@ -385,7 +385,7 @@ class WalkLimitEngine:
                     return
                 
                 # Check if we've reached target
-                if process.current_price <= process.target_price:
+                if process.current_price < process.target_price:
                     self.logger.info(f"[TARGET] Process {process.process_id} reached target bid price ${process.target_price:.2f}")
                     break
                 

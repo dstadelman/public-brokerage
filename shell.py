@@ -257,37 +257,6 @@ Initializing...
         expiration = parts[1]
         self._show_option_chain(symbol, expiration)
     
-    def do_show(self, args):
-        """Show various information (positions, options, chain)."""
-        if not args:
-            print("Usage: show <positions|options|chain> [arguments]")
-            return
-        
-        parts = shlex.split(args)
-        command = parts[0].lower()
-        
-        if command == "positions":
-            account_id = parts[1] if len(parts) > 1 else self.default_account
-            self._show_positions(account_id)
-        
-        elif command == "options":
-            if len(parts) < 2:
-                print("Usage: show options <symbol>")
-                return
-            symbol = parts[1].upper()
-            self._show_options(symbol)
-        
-        elif command == "chain":
-            if len(parts) < 3:
-                print("Usage: show chain <symbol> <expiration>")
-                return
-            symbol = parts[1].upper()
-            expiration = parts[2]
-            self._show_option_chain(symbol, expiration)
-        
-        else:
-            print("Available: show positions [account_id], show options <symbol>, show chain <symbol> <expiration>")
-    
     def do_quote(self, args):
         """Get real-time quote for a symbol."""
         if not args:
@@ -539,14 +508,14 @@ Initializing...
         commands = [
             ("accounts", "List all available accounts"),
             ("set default account <id>", "Set default account for operations"),
-            ("show positions [account_id]", "Show positions for account"),
-            ("show options <symbol>", "Show option expirations for symbol"),
-            ("show chain <symbol> <exp>", "Show option chain for symbol and expiration"),
+            ("positions [account_id]", "Show positions for account"),
+            ("options <symbol>", "Show option expirations for symbol"),
+            ("chain <symbol> <exp>", "Show option chain for symbol and expiration"),
             ("quote <symbol>", "Get real-time quote"),
             ("open_call_spread", "Open call spread with walk limit orders"),
             ("close_call_spread", "Close call spreads with walk limit orders"),
             ("status", "Show all background process status"),
-            ("cancel <id|all>", "Cancel background processes"),
+            ("cancel <id|all>", "Cancel background processes and orders"),
             ("logs <process_id>", "Show process execution logs"),
             ("exit", "Exit the shell")
         ]

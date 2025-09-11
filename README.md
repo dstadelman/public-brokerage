@@ -215,19 +215,23 @@ The library includes an interactive shell interface for easy trading operations:
 # Interactive mode - enter commands interactively
 python shell.py
 
-# Batch mode - execute queued commands
-python shell.py -e "get_accounts; get_positions 12345678; exit"
+# Batch mode - pipe commands to shell
+echo -e "accounts\npositions 12345678\nexit" | python shell.py
 ```
 
 ### Available Commands
 
-- `get_accounts` - List all your accounts
-- `get_positions <account_id>` - Show positions for an account
-- `get_balance <account_id>` - Display account balance
-- `get_order <account_id> <order_id>` - Check order status  
-- `walk_limit <account_id> <json_file>` - Execute walk limit order strategy
+- `accounts` - List all your accounts
+- `positions [account_id]` - Show positions for an account
+- `options <symbol>` - Show option expirations for symbol
+- `chain <symbol> <expiration>` - Show option chain
+- `quote <symbol>` - Get real-time quote
+- `open_call_spread` - Open call spread with walk limit orders
+- `close_call_spread` - Close call spreads with walk limit orders  
+- `status` - Show all background process status
 - `cancel <process_id>` - Cancel a specific process and its order
 - `cancel all` - **Cancel ALL active processes and their broker orders**
+- `logs <process_id>` - Show process execution logs
 - `help` - Show all available commands
 - `exit` - Exit the shell
 

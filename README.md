@@ -19,7 +19,26 @@ Clone the repository and install dependencies:
 ```bash
 git clone https://github.com/yourusername/public-brokerage.git
 cd public-brokerage
-pip install -r requirements.txt
+pip install -e .
+```
+
+## Project Structure
+
+```
+public-brokerage/
+├── public_brokerage/          # Main library package
+│   ├── models/               # Data models and schemas
+│   ├── accounts.py           # Account management
+│   ├── orders.py            # Order operations
+│   ├── positions.py         # Position tracking
+│   └── client.py            # HTTP client
+├── shell.py                 # Interactive trading shell
+├── walk_limit_engine.py     # Automated order management
+├── *_test.py               # Unit tests (follow naming convention)
+└── README.md               # This file
+```
+
+## Basic Usage
 ```
 
 ## Quick Start
@@ -186,6 +205,72 @@ print(f"Order status: {order.status}")
 cancel_order(client, account_id, order_id)
 ```
 
+## Interactive Shell
+
+The library includes an interactive shell interface for easy trading operations:
+
+### Basic Usage
+
+```bash
+# Interactive mode - enter commands interactively
+python shell.py
+
+# Batch mode - execute queued commands
+python shell.py -e "get_accounts; get_positions 12345678; exit"
+```
+
+### Available Commands
+
+- `get_accounts` - List all your accounts
+- `get_positions <account_id>` - Show positions for an account
+- `get_balance <account_id>` - Display account balance
+- `get_order <account_id> <order_id>` - Check order status  
+- `walk_limit <account_id> <json_file>` - Execute walk limit order strategy
+- `cancel <process_id>` - Cancel a specific process and its order
+- `cancel all` - **Cancel ALL active processes and their broker orders**
+- `help` - Show all available commands
+- `exit` - Exit the shell
+
+### Walk Limit Orders
+
+Use the walk limit engine to automatically manage partial fills and cancellations:
+
+```bash
+# In the shell
+walk_limit 12345678 my_order.json
+```
+
+Example order JSON file:
+```json
+{
+  "orderId": "unique-order-id",
+  "instrument": {"symbol": "SPY", "type": "EQUITY"},
+  "orderSide": "BUY",
+  "orderType": "LIMIT",
+  "expiration": {"timeInForce": "DAY"},
+  "quantity": "10",
+  "limitPrice": "420.50"
+}
+```
+
+The walk limit engine will:
+- Monitor for partial fills
+- Automatically handle remaining quantities
+- Provide real-time status updates
+- Cancel unfilled portions when needed
+
+### Important: Order Cancellation
+
+⚠️ **CRITICAL**: The `cancel all` command will immediately cancel **ALL active orders** with your broker, not just stop the background processes. Use with extreme caution in live trading!
+
+### Shell Features
+
+- **Interactive Mode**: Full command history and auto-completion
+- **Batch Mode**: Execute multiple commands with `-e` flag
+- **Status Updates**: Real-time progress for long-running operations
+- **Error Handling**: Graceful error messages and recovery
+- **Position Tracking**: Monitor account positions and balances
+
 ## Error Handling
 
 The library uses standard Python exceptions:
@@ -234,14 +319,22 @@ client = PublicBrokerageClient(
 Run the unit tests:
 
 ```bash
-python -m unittest discover tests/
+python -m unittest discover . -p "*_test.py"
+```
+
+Run specific test modules:
+
+```bash
+python -m unittest client_test
+python -m unittest auth_test
+python -m unittest walk_limit_engine_test
 ```
 
 Run with coverage:
 
 ```bash
 pip install coverage
-coverage run -m unittest discover tests/
+coverage run -m unittest discover . -p "*_test.py"
 coverage report
 coverage html  # Generate HTML report
 ```

@@ -44,6 +44,7 @@ class WalkLimitProcess:
     short_symbol: str  # Actual option symbol
     long_symbol: str   # Actual option symbol
     quantity: int
+    remaining_quantity: int  # Track unfilled quantity for partial fills
     max_wait_time: int
     execute_mode: bool
     status: ProcessStatus
@@ -112,6 +113,7 @@ class WalkLimitEngine:
             short_symbol=short_symbol,
             long_symbol=long_symbol,
             quantity=quantity,
+            remaining_quantity=quantity,  # Initially all quantity is remaining
             max_wait_time=max_wait_time,
             execute_mode=execute_mode,
             status=ProcessStatus.STARTING,
@@ -185,6 +187,7 @@ class WalkLimitEngine:
                 short_symbol=short_symbol,
                 long_symbol=long_symbol,
                 quantity=spread.quantity,
+                remaining_quantity=spread.quantity,  # Initially all quantity is remaining
                 max_wait_time=max_wait_time,
                 execute_mode=execute_mode,
                 status=ProcessStatus.STARTING,
@@ -271,6 +274,12 @@ class WalkLimitEngine:
             process.status = ProcessStatus.RUNNING
             
             while not stop_event.is_set() and process.attempts < process.max_attempts:
+                # Safety check: stop if no remaining quantity
+                if process.remaining_quantity <= 0:
+                    self.logger.info(f"[COMPLETE] Process {process.process_id} - all contracts filled")
+                    process.status = ProcessStatus.COMPLETED
+                    return
+                
                 # Check if we've reached target
                 if process.current_price >= process.target_price:
                     self.logger.info(f"Process {process.process_id} reached target price")
@@ -293,26 +302,38 @@ class WalkLimitEngine:
                 self.logger.info(f"Preflight successful for process {process.process_id} at ${process.current_price:.2f}")
                 
                 if process.execute_mode:
-                    # Place the actual order
+                    # Place the actual order using remaining quantity
                     order_response = place_multileg_order(self.client, account_id, order_request)
                     if order_response.ok:
                         process.last_order_id = order_response.orderId
-                        self.logger.info(f"Order placed: {order_response.orderId}")
+                        self.logger.info(f"[ORDER] Placed order {order_response.orderId} for {process.remaining_quantity} contracts at ${process.current_price:.2f}")
                         
-                        # Wait for fill or timeout
-                        if self._wait_for_fill(process, stop_event, account_id):
+                        # Wait for fill or timeout with partial fill handling
+                        is_complete, filled_qty = self._wait_for_fill_with_partial_handling(process, stop_event, account_id)
+                        
+                        # Update remaining quantity based on fills
+                        if filled_qty > 0:
+                            process.remaining_quantity -= filled_qty
+                            self.logger.info(f"[PROGRESS] Filled {filled_qty} contracts, {process.remaining_quantity} remaining")
+                        
+                        # If completely filled, we're done
+                        if is_complete or process.remaining_quantity <= 0:
                             process.status = ProcessStatus.COMPLETED
-                            self.logger.info(f"Process {process.process_id} completed successfully")
+                            self.logger.info(f"[SUCCESS] Process {process.process_id} completed successfully - all {process.quantity} contracts filled")
                             return
                         
-                        # Cancel unfilled order
+                        # Cancel any unfilled portion and verify cancellation
                         if process.last_order_id:
-                            cancel_order(self.client, account_id, process.last_order_id)
+                            cancel_success = self._cancel_order_with_verification(process, account_id)
+                            if not cancel_success:
+                                self.logger.error(f"[ERROR] Failed to cancel order {process.last_order_id} - stopping process for safety")
+                                process.status = ProcessStatus.ERROR
+                                return
                     else:
                         self.logger.error(f"Failed to place order: {order_response.errorMessage}")
                 else:
                     # Dry run - just log what would happen
-                    self.logger.info(f"DRY RUN: Would place order at ${process.current_price:.2f}")
+                    self.logger.info(f"DRY RUN: Would place order for {process.remaining_quantity} contracts at ${process.current_price:.2f}")
                     time.sleep(1)  # Brief pause for dry run
                 
                 # Move to next price level
@@ -335,6 +356,12 @@ class WalkLimitEngine:
             self.logger.info(f"[INCREMENT] Increment: ${abs(process.increment):.2f}, Max attempts: {process.max_attempts}")
             
             while not stop_event.is_set() and process.attempts < process.max_attempts:
+                # Safety check: stop if no remaining quantity
+                if process.remaining_quantity <= 0:
+                    self.logger.info(f"[COMPLETE] Process {process.process_id} - all contracts filled")
+                    process.status = ProcessStatus.COMPLETED
+                    return
+                
                 # Check if we've reached target
                 if process.current_price <= process.target_price:
                     self.logger.info(f"[TARGET] Process {process.process_id} reached target bid price ${process.target_price:.2f}")
@@ -424,26 +451,38 @@ class WalkLimitEngine:
                 self.logger.info(f"[PREFLIGHT] SUMMARY: Cost=${cost}, Proceeds=${proceeds}, Commission=${commission}")
                 
                 if process.execute_mode:
-                    # Place the actual order
+                    # Place the actual order using remaining quantity
                     order_response = place_multileg_order(self.client, account_id, order_request)
                     if order_response.ok:
                         process.last_order_id = order_response.orderId
-                        self.logger.info(f"Order placed: {order_response.orderId}")
+                        self.logger.info(f"[ORDER] Placed order {order_response.orderId} for {process.remaining_quantity} contracts at ${process.current_price:.2f}")
                         
-                        # Wait for fill or timeout
-                        if self._wait_for_fill(process, stop_event, account_id):
+                        # Wait for fill or timeout with partial fill handling
+                        is_complete, filled_qty = self._wait_for_fill_with_partial_handling(process, stop_event, account_id)
+                        
+                        # Update remaining quantity based on fills
+                        if filled_qty > 0:
+                            process.remaining_quantity -= filled_qty
+                            self.logger.info(f"[PROGRESS] Filled {filled_qty} contracts, {process.remaining_quantity} remaining")
+                        
+                        # If completely filled, we're done
+                        if is_complete or process.remaining_quantity <= 0:
                             process.status = ProcessStatus.COMPLETED
-                            self.logger.info(f"Process {process.process_id} completed successfully")
+                            self.logger.info(f"[SUCCESS] Process {process.process_id} completed successfully - all {process.quantity} contracts filled")
                             return
                         
-                        # Cancel unfilled order
+                        # Cancel any unfilled portion and verify cancellation
                         if process.last_order_id:
-                            cancel_order(self.client, account_id, process.last_order_id)
+                            cancel_success = self._cancel_order_with_verification(process, account_id)
+                            if not cancel_success:
+                                self.logger.error(f"[ERROR] Failed to cancel order {process.last_order_id} - stopping process for safety")
+                                process.status = ProcessStatus.ERROR
+                                return
                     else:
                         self.logger.error(f"Failed to place order: {order_response.errorMessage}")
                 else:
                     # Dry run - just log what would happen
-                    self.logger.info(f"DRY RUN: Would place order at ${process.current_price:.2f}")
+                    self.logger.info(f"DRY RUN: Would place order for {process.remaining_quantity} contracts at ${process.current_price:.2f}")
                     time.sleep(1)  # Brief pause for dry run
                 
                 # Move to next price level (walking down for closing)
@@ -470,7 +509,7 @@ class WalkLimitEngine:
                 instrument=Instrument(symbol=process.short_symbol, type=InstrumentType.OPTION),
                 side=OrderSide.SELL,
                 openCloseIndicator=OpenCloseIndicator.OPEN,
-                ratioQuantity=process.quantity
+                ratioQuantity=process.remaining_quantity  # Use remaining quantity for partial fills
             )
             legs.append(short_leg)
             
@@ -479,7 +518,7 @@ class WalkLimitEngine:
                 instrument=Instrument(symbol=process.long_symbol, type=InstrumentType.OPTION),
                 side=OrderSide.BUY,
                 openCloseIndicator=OpenCloseIndicator.OPEN,
-                ratioQuantity=process.quantity
+                ratioQuantity=process.remaining_quantity  # Use remaining quantity for partial fills
             )
             legs.append(long_leg)
             
@@ -487,7 +526,7 @@ class WalkLimitEngine:
             expiration = Expiration(timeInForce=TimeInForce.DAY)
             return MultiLegOrderRequest(
                 orderId=None,  # Don't include orderId for preflight
-                quantity=process.quantity,
+                quantity=process.remaining_quantity,  # Use remaining quantity for partial fills
                 type=OrderType.LIMIT,
                 limitPrice=str(process.current_price),
                 expiration=expiration,
@@ -535,7 +574,7 @@ class WalkLimitEngine:
                     "timeInForce": "DAY",
                     "expirationTime": None  # DAY orders don't need specific time
                 },
-                "quantity": str(process.quantity),
+                "quantity": str(process.remaining_quantity),  # Use remaining quantity for partial fills
                 "limitPrice": str(-process.current_price),  # Send NEGATIVE for closing (we want credit)
                 "legs": legs
             }
@@ -569,6 +608,104 @@ class WalkLimitEngine:
                     self.errorMessage = str(e)
             return MockResponse()
     
+    def _wait_for_fill_with_partial_handling(self, process: WalkLimitProcess, stop_event: threading.Event, account_id: str) -> tuple[bool, int]:
+        """
+        Wait for order to fill or timeout, handling partial fills.
+        
+        Returns:
+            tuple[bool, int]: (is_complete, filled_quantity)
+            - is_complete: True if fully filled, False if partial/unfilled/timeout
+            - filled_quantity: Number of contracts that were filled
+        """
+        if not process.last_order_id:
+            return False, 0
+        
+        start_time = time.time()
+        while time.time() - start_time < process.max_wait_time:
+            if stop_event.is_set():
+                return False, 0
+            
+            try:
+                order_status = get_order(self.client, account_id, process.last_order_id)
+                
+                # Get filled quantity (default to 0 if not available)
+                filled_qty = int(float(order_status.filledQuantity)) if hasattr(order_status, 'filledQuantity') and order_status.filledQuantity else 0
+                
+                if order_status.status == 'FILLED':
+                    self.logger.info(f"[FILL] Order {process.last_order_id} fully filled: {filled_qty} contracts")
+                    return True, filled_qty  # Complete fill
+                elif order_status.status == 'PARTIALLY_FILLED':
+                    self.logger.info(f"[PARTIAL] Order {process.last_order_id} partially filled: {filled_qty}/{process.remaining_quantity} contracts")
+                    return False, filled_qty  # Partial fill - continue walking
+                elif order_status.status in ['CANCELLED', 'REJECTED']:
+                    self.logger.info(f"[STATUS] Order {process.last_order_id} status: {order_status.status}")
+                    return False, filled_qty  # No more fills possible
+                    
+            except Exception as e:
+                self.logger.error(f"Error checking order status: {e}")
+            
+            time.sleep(1)
+        
+        # Timeout - check final status for any partial fills
+        try:
+            order_status = get_order(self.client, account_id, process.last_order_id)
+            filled_qty = int(float(order_status.filledQuantity)) if hasattr(order_status, 'filledQuantity') and order_status.filledQuantity else 0
+            if filled_qty > 0:
+                self.logger.info(f"[TIMEOUT] Order {process.last_order_id} timeout with partial fill: {filled_qty} contracts")
+            else:
+                self.logger.info(f"[TIMEOUT] Order {process.last_order_id} timeout with no fills")
+            return False, filled_qty
+        except Exception as e:
+            self.logger.error(f"Error checking final order status: {e}")
+            return False, 0
+
+    def _cancel_order_with_verification(self, process: WalkLimitProcess, account_id: str) -> bool:
+        """
+        Cancel order and verify it was actually cancelled.
+        
+        Returns:
+            bool: True if successfully cancelled, False otherwise
+        """
+        if not process.last_order_id:
+            return True  # No order to cancel
+            
+        try:
+            # Send cancel request
+            self.logger.info(f"[CANCEL] Cancelling order {process.last_order_id}")
+            cancel_order(self.client, account_id, process.last_order_id)
+            
+            # Verify cancellation with retries
+            max_cancel_checks = 10  # Up to 10 seconds
+            for attempt in range(max_cancel_checks):
+                try:
+                    order_status = get_order(self.client, account_id, process.last_order_id)
+                    
+                    if order_status.status in ['CANCELLED']:
+                        self.logger.info(f"[CANCEL] Order {process.last_order_id} successfully cancelled")
+                        return True
+                    elif order_status.status in ['FILLED', 'PARTIALLY_FILLED']:
+                        self.logger.warning(f"[CANCEL] Order {process.last_order_id} filled during cancel attempt! Status: {order_status.status}")
+                        return False  # Order filled before we could cancel
+                    elif order_status.status in ['REJECTED']:
+                        self.logger.info(f"[CANCEL] Order {process.last_order_id} was rejected (counts as cancelled)")
+                        return True
+                    
+                    # Still pending cancellation
+                    self.logger.debug(f"[CANCEL] Attempt {attempt + 1}: Order {process.last_order_id} status: {order_status.status}")
+                    time.sleep(1)
+                    
+                except Exception as e:
+                    self.logger.error(f"Error checking cancel status (attempt {attempt + 1}): {e}")
+                    time.sleep(1)
+            
+            # If we get here, cancel verification timed out
+            self.logger.error(f"[CANCEL] Failed to verify cancellation of order {process.last_order_id} after {max_cancel_checks} attempts")
+            return False
+            
+        except Exception as e:
+            self.logger.error(f"Error cancelling order {process.last_order_id}: {e}")
+            return False
+
     def _wait_for_fill(self, process: WalkLimitProcess, stop_event: threading.Event, account_id: str) -> bool:
         """Wait for order to fill or timeout."""
         if not process.last_order_id:
@@ -601,6 +738,8 @@ class WalkLimitEngine:
                 'strategy': process.strategy,
                 'status': process.status.value,
                 'current_price': process.current_price,
+                'quantity': process.quantity,
+                'remaining_quantity': process.remaining_quantity,
                 'attempts': process.attempts,
                 'max_attempts': process.max_attempts,
                 'created_at': process.created_at.isoformat(),
@@ -669,3 +808,42 @@ class WalkLimitEngine:
             if process.status in [ProcessStatus.STARTING, ProcessStatus.RUNNING, ProcessStatus.WAITING]:
                 return True
         return False
+    
+    def cancel_all_processes(self) -> int:
+        """Cancel all active processes and their associated orders.
+        
+        This will:
+        1. Stop all background processes
+        2. Cancel all pending orders with the broker
+        3. Update process status to CANCELLED
+        
+        Returns:
+            int: Number of processes that were cancelled
+        """
+        cancelled_count = 0
+        process_ids = list(self.processes.keys())
+        
+        self.logger.info(f"Cancelling all processes ({len(process_ids)} total)")
+        
+        for process_id in process_ids:
+            process = self.processes[process_id]
+            if process.status not in [ProcessStatus.CANCELLED, ProcessStatus.COMPLETED, ProcessStatus.ERROR]:
+                self.logger.info(f"Cancelling process {process_id} (Order: {process.last_order_id})")
+                if self.cancel_process(process_id):
+                    cancelled_count += 1
+        
+        self.logger.info(f"Successfully cancelled {cancelled_count} processes")
+        return cancelled_count
+    
+    def get_active_orders(self) -> Dict[str, str]:
+        """Get all active orders that would be cancelled.
+        
+        Returns:
+            Dict[str, str]: Mapping of process_id to order_id for active processes
+        """
+        active_orders = {}
+        for process_id, process in self.processes.items():
+            if (process.status not in [ProcessStatus.CANCELLED, ProcessStatus.COMPLETED, ProcessStatus.ERROR] 
+                and process.last_order_id):
+                active_orders[process_id] = process.last_order_id
+        return active_orders

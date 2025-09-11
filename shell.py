@@ -470,13 +470,15 @@ Initializing...
             
             for process_id, info in processes.items():
                 status_color = self._get_status_color(info['status'])
+                filled_qty = info.get('quantity', 0) - info.get('remaining_quantity', 0)
                 print(f"{Colors.BOLD}{process_id}{Colors.END} - {info['symbol']} {info['strategy']}")
                 print(f"   Status: {status_color}{info['status']}{Colors.END}")
                 print(f"   Progress: {info['attempts']}/{info['max_attempts']} attempts")
+                print(f"   Quantity: {filled_qty}/{info.get('quantity', 0)} filled ({info.get('remaining_quantity', 0)} remaining)")
                 print(f"   Current Price: ${info['current_price']:.2f}")
                 print(f"   Last Update: {info['last_update']}")
                 
-                if info['messages']:
+                if info.get('messages'):
                     print(f"   Last Message: {info['messages'][-1]}")
                 print()
         
@@ -490,8 +492,15 @@ Initializing...
             return
         
         if args.strip().lower() == "all":
+            # Show what orders will be cancelled first
+            active_orders = self.walk_engine.get_active_orders()
+            if active_orders:
+                print(f"{Colors.YELLOW}⚠️  About to cancel {len(active_orders)} active orders:{Colors.END}")
+                for process_id, order_id in active_orders.items():
+                    print(f"  Process {process_id[:8]}: Order {order_id}")
+                
             count = self.walk_engine.cancel_all_processes()
-            print(f"{Colors.GREEN}✅ Cancelled {count} processes{Colors.END}")
+            print(f"{Colors.GREEN}✅ Cancelled {count} processes and their orders{Colors.END}")
         else:
             process_id = args.strip()
             if self.walk_engine.cancel_process(process_id):

@@ -269,105 +269,122 @@ class WalkLimitEngine:
             process.status = ProcessStatus.RUNNING
             
             while not stop_event.is_set() and process.attempts < process.max_attempts:
-                # Safety check: stop if no remaining quantity
-                if process.remaining_quantity <= 0:
-                    self.logger.info(f"[COMPLETE] Process {process.process_id} - all contracts filled")
-                    process.status = ProcessStatus.COMPLETED
-                    return
-                
-                # Check if we've reached target
-                if process.current_price > process.target_price:
-                    self.logger.info(f"Process {process.process_id} reached target price")
-                    break
-                
-                # Create and preflight order
-                preflight_request = self._create_open_spread_preflight(process, account_id)
-                if not preflight_request:
-                    self.logger.error(f"Failed to create preflight for process {process.process_id}")
-                    break
-                
-                # Print preflight details - handle Pydantic model format
-                if isinstance(preflight_request, MultiLegPreflightRequest):
-                    limit_price = float(preflight_request.limitPrice)
-                    legs = preflight_request.legs
-                    quantity = preflight_request.quantity
-                    self.logger.info(f"[PREFLIGHT] Preflight details: {len(legs)} legs, quantity: {quantity}, limit: ${limit_price:.2f}")
-                    for i, leg in enumerate(legs):
-                        side_str = leg.side if isinstance(leg.side, str) else leg.side.value
-                        open_str = leg.openCloseIndicator if isinstance(leg.openCloseIndicator, str) else leg.openCloseIndicator.value
-                        self.logger.info(f"   Leg {i+1}: {side_str} {leg.ratioQuantity} {leg.instrument.symbol} ({open_str})")
-                
-                # Preflight the order
-                preflight_result = preflight_multi_leg(self.client, account_id, preflight_request)
-                
-                if preflight_result is None or hasattr(preflight_result, 'errorMessage'):
-                    error_msg = getattr(preflight_result, 'errorMessage', 'Unknown error') if preflight_result else 'API request failed'
-                    self.logger.error(f"Preflight failed for process {process.process_id}: {error_msg}")
-                    break
-                
-                self.logger.info(f"Preflight successful for process {process.process_id} at ${process.current_price:.2f}")
-                
-                # Log preflight response details
-                if hasattr(preflight_result, 'estimatedCommission'):
-                    self.logger.info(f"[PREFLIGHT] Commission: ${preflight_result.estimatedCommission}")
-                if hasattr(preflight_result, 'orderValue'):
-                    self.logger.info(f"[PREFLIGHT] Order Value: ${preflight_result.orderValue}")
-                if hasattr(preflight_result, 'buyingPowerRequirement'):
-                    self.logger.info(f"[PREFLIGHT] Buying Power Required: ${preflight_result.buyingPowerRequirement}")
-                
-                if process.execute_mode:
-                    # Create actual order request (different from preflight)
-                    import uuid
-                    order_id = str(uuid.uuid4())
-                    order_request = self._create_open_spread_order(process, account_id, order_id)
-                    if not order_request:
-                        self.logger.error(f"Failed to create order for process {process.process_id}")
+                try:
+                    # Safety check: stop if no remaining quantity
+                    if process.remaining_quantity <= 0:
+                        self.logger.info(f"[COMPLETE] Process {process.process_id} - all contracts filled")
+                        process.status = ProcessStatus.COMPLETED
+                        return
+                    
+                    # Check if we've reached target
+                    if process.current_price > process.target_price:
+                        self.logger.info(f"Process {process.process_id} reached target price")
                         break
                     
-                    # Place the actual order using remaining quantity
-                    order_response = place_multileg_order(self.client, account_id, order_request)
-                    if order_response.ok:
-                        process.last_order_id = order_response.orderId
-                        self.logger.info(f"[ORDER] Placed order {order_response.orderId} for {process.remaining_quantity} contracts at ${process.current_price:.2f}")
-                        
-                        # Wait for fill or timeout with partial fill handling
-                        is_complete, filled_qty = self._wait_for_fill_with_partial_handling(process, stop_event, account_id)
-                        
-                        # Update remaining quantity based on fills
-                        if filled_qty > 0:
-                            process.remaining_quantity -= filled_qty
-                            self.logger.info(f"[PROGRESS] Filled {filled_qty} contracts, {process.remaining_quantity} remaining")
-                        
-                        # If completely filled, we're done
-                        if is_complete or process.remaining_quantity <= 0:
-                            process.status = ProcessStatus.COMPLETED
-                            self.logger.info(f"[SUCCESS] Process {process.process_id} completed successfully - all {process.quantity} contracts filled")
+                    # Create and preflight order
+                    preflight_request = self._create_open_spread_preflight(process, account_id)
+                    if not preflight_request:
+                        self._emergency_stop_process(process, account_id, "Failed to create preflight request")
+                        return
+                    
+                    # Print preflight details - handle Pydantic model format
+                    if isinstance(preflight_request, MultiLegPreflightRequest):
+                        limit_price = float(preflight_request.limitPrice)
+                        legs = preflight_request.legs
+                        quantity = preflight_request.quantity
+                        self.logger.info(f"[PREFLIGHT] Preflight details: {len(legs)} legs, quantity: {quantity}, limit: ${limit_price:.2f}")
+                        for i, leg in enumerate(legs):
+                            side_str = leg.side if isinstance(leg.side, str) else leg.side.value
+                            open_str = leg.openCloseIndicator if isinstance(leg.openCloseIndicator, str) else leg.openCloseIndicator.value
+                            self.logger.info(f"   Leg {i+1}: {side_str} {leg.ratioQuantity} {leg.instrument.symbol} ({open_str})")
+                    
+                    # Preflight the order
+                    try:
+                        preflight_result = preflight_multi_leg(self.client, account_id, preflight_request)
+                    except Exception as preflight_error:
+                        self._emergency_stop_process(process, account_id, f"Preflight API error: {preflight_error}")
+                        return
+                    
+                    if preflight_result is None or hasattr(preflight_result, 'errorMessage'):
+                        error_msg = getattr(preflight_result, 'errorMessage', 'Unknown error') if preflight_result else 'API request failed'
+                        self._emergency_stop_process(process, account_id, f"Preflight failed: {error_msg}")
+                        return
+                    
+                    self.logger.info(f"Preflight successful for process {process.process_id} at ${process.current_price:.2f}")
+                    
+                    # Log preflight response details
+                    if hasattr(preflight_result, 'estimatedCommission'):
+                        self.logger.info(f"[PREFLIGHT] Commission: ${preflight_result.estimatedCommission}")
+                    if hasattr(preflight_result, 'orderValue'):
+                        self.logger.info(f"[PREFLIGHT] Order Value: ${preflight_result.orderValue}")
+                    if hasattr(preflight_result, 'buyingPowerRequirement'):
+                        self.logger.info(f"[PREFLIGHT] Buying Power Required: ${preflight_result.buyingPowerRequirement}")
+                    
+                    if process.execute_mode:
+                        # Create actual order request (different from preflight)
+                        import uuid
+                        order_id = str(uuid.uuid4())
+                        order_request = self._create_open_spread_order(process, account_id, order_id)
+                        if not order_request:
+                            self._emergency_stop_process(process, account_id, "Failed to create order request")
                             return
                         
-                        # Cancel any unfilled portion and verify cancellation
-                        if process.last_order_id:
-                            cancel_success = self._cancel_order_with_verification(process, account_id)
-                            if not cancel_success:
-                                self.logger.error(f"[ERROR] Failed to cancel order {process.last_order_id} - stopping process for safety")
-                                process.status = ProcessStatus.ERROR
+                        # Place the actual order using remaining quantity
+                        try:
+                            order_id = place_multileg_order(self.client, account_id, order_request)
+                        except Exception as order_error:
+                            self._emergency_stop_process(process, account_id, f"Order placement error: {order_error}")
+                            return
+                            
+                        if order_id:  # If we got an order ID, the order was successful
+                            process.last_order_id = order_id
+                            self.logger.info(f"[ORDER] Placed order {order_id} for {process.remaining_quantity} contracts at ${process.current_price:.2f}")
+                            
+                            # Wait for fill or timeout with partial fill handling
+                            try:
+                                is_complete, filled_qty = self._wait_for_fill_with_partial_handling(process, stop_event, account_id)
+                            except Exception as fill_error:
+                                self._emergency_stop_process(process, account_id, f"Fill monitoring error: {fill_error}")
                                 return
+                            
+                            # Update remaining quantity based on fills
+                            if filled_qty > 0:
+                                process.remaining_quantity -= filled_qty
+                                self.logger.info(f"[PROGRESS] Filled {filled_qty} contracts, {process.remaining_quantity} remaining")
+                            
+                            # If completely filled, we're done
+                            if is_complete or process.remaining_quantity <= 0:
+                                process.status = ProcessStatus.COMPLETED
+                                self.logger.info(f"[SUCCESS] Process {process.process_id} completed successfully - all {process.quantity} contracts filled")
+                                return
+                            
+                            # Cancel any unfilled portion and verify cancellation
+                            if process.last_order_id:
+                                cancel_success = self._cancel_order_with_verification(process, account_id)
+                                if not cancel_success:
+                                    self._emergency_stop_process(process, account_id, f"Failed to cancel order {process.last_order_id}")
+                                    return
+                        else:
+                            self._emergency_stop_process(process, account_id, "Order placement returned no order ID")
+                            return
                     else:
-                        self.logger.error(f"Failed to place order: {order_response.errorMessage}")
-                else:
-                    # Dry run - just log what would happen
-                    self.logger.info(f"DRY RUN: Would place order for {process.remaining_quantity} contracts at ${process.current_price:.2f}")
-                    time.sleep(1)  # Brief pause for dry run
-                
-                # Move to next price level
-                process.current_price = round(process.current_price + process.increment, 2)  # Round to penny
-                process.attempts += 1
-                process.last_update = datetime.now()
+                        # Dry run - just log what would happen
+                        self.logger.info(f"DRY RUN: Would place order for {process.remaining_quantity} contracts at ${process.current_price:.2f}")
+                        time.sleep(1)  # Brief pause for dry run
+                    
+                    # Move to next price level
+                    process.current_price = round(process.current_price + process.increment, 2)  # Round to penny
+                    process.attempts += 1
+                    process.last_update = datetime.now()
+                    
+                except Exception as loop_error:
+                    self._emergency_stop_process(process, account_id, f"Loop iteration error: {loop_error}")
+                    return
             
             process.status = ProcessStatus.COMPLETED
             
         except Exception as e:
-            self.logger.error(f"Error in open spread process {process.process_id}: {e}")
-            process.status = ProcessStatus.ERROR
+            self._emergency_stop_process(process, account_id, f"Process error: {e}")
     
     def _run_close_spread_process(self, process: WalkLimitProcess, stop_event: threading.Event, account_id: str):
         """Run the walk limit process for closing a spread."""
@@ -378,145 +395,162 @@ class WalkLimitEngine:
             self.logger.info(f"[INCREMENT] Increment: ${abs(process.increment):.2f}, Max attempts: {process.max_attempts}")
             
             while not stop_event.is_set() and process.attempts < process.max_attempts:
-                # Safety check: stop if no remaining quantity
-                if process.remaining_quantity <= 0:
-                    self.logger.info(f"[COMPLETE] Process {process.process_id} - all contracts filled")
-                    process.status = ProcessStatus.COMPLETED
-                    return
-                
-                # Check if we've reached target
-                if process.current_price < process.target_price:
-                    self.logger.info(f"[TARGET] Process {process.process_id} reached target bid price ${process.target_price:.2f}")
-                    break
-                
-                # Create and preflight order
-                self.logger.info(f"[ATTEMPT] Attempt {process.attempts + 1}/{process.max_attempts}: Testing order at ${process.current_price:.2f}")
-                preflight_request = self._create_close_spread_preflight(process, account_id)
-                if not preflight_request:
-                    self.logger.error(f"Failed to create preflight for process {process.process_id}")
-                    break
-                
-                # Print preflight details - handle Pydantic model format
-                if isinstance(preflight_request, MultiLegPreflightRequest):
-                    limit_price = float(preflight_request.limitPrice)
-                    legs = preflight_request.legs
-                    quantity = preflight_request.quantity
-                    self.logger.info(f"[PREFLIGHT] Preflight details: {len(legs)} legs, quantity: {quantity}, limit: ${limit_price:.2f}")
-                    for i, leg in enumerate(legs):
-                        side_str = leg.side if isinstance(leg.side, str) else leg.side.value
-                        close_str = leg.openCloseIndicator if isinstance(leg.openCloseIndicator, str) else leg.openCloseIndicator.value
-                        self.logger.info(f"   Leg {i+1}: {side_str} {leg.ratioQuantity} {leg.instrument.symbol} ({close_str})")
-                
-                # Debug: Log the preflight request data
-                self.logger.info(f"[DEBUG] Preflight request data: {preflight_request}")
-                
-                # Preflight the order
-                preflight_result = preflight_multi_leg(self.client, account_id, preflight_request)
-                
-                if preflight_result is None or hasattr(preflight_result, 'errorMessage'):
-                    error_msg = getattr(preflight_result, 'errorMessage', 'Unknown error') if preflight_result else 'API request failed'
-                    self.logger.error(f"[PREFLIGHT] Preflight failed for process {process.process_id}: {error_msg}")
-                    break
-                
-                self.logger.info(f"[PREFLIGHT] Preflight successful for process {process.process_id} at ${process.current_price:.2f}")
-                
-                # Log the ENTIRE preflight response for debugging
-                self.logger.info(f"[PREFLIGHT] FULL RESPONSE: {preflight_result}")
-                self.logger.info(f"[PREFLIGHT] RESPONSE TYPE: {type(preflight_result)}")
-                self.logger.info(f"[PREFLIGHT] RESPONSE DICT: {preflight_result.__dict__ if hasattr(preflight_result, '__dict__') else 'No __dict__'}")
-                
-                # Log all the preflight response details
-                if hasattr(preflight_result, 'baseSymbol'):
-                    self.logger.info(f"[PREFLIGHT] Base Symbol: {preflight_result.baseSymbol}")
-                if hasattr(preflight_result, 'strategyName'):
-                    self.logger.info(f"[PREFLIGHT] Strategy: {preflight_result.strategyName}")
-                if hasattr(preflight_result, 'estimatedCost'):
-                    self.logger.info(f"[PREFLIGHT] Estimated Cost: ${preflight_result.estimatedCost}")
-                if hasattr(preflight_result, 'estimatedProceeds'):
-                    self.logger.info(f"[PREFLIGHT] Estimated Proceeds: ${preflight_result.estimatedProceeds}")
-                if hasattr(preflight_result, 'orderValue'):
-                    self.logger.info(f"[PREFLIGHT] Order Value: ${preflight_result.orderValue}")
-                if hasattr(preflight_result, 'estimatedCommission'):
-                    self.logger.info(f"[PREFLIGHT] Commission: ${preflight_result.estimatedCommission}")
-                if hasattr(preflight_result, 'buyingPowerRequirement'):
-                    self.logger.info(f"[PREFLIGHT] Buying Power Required: ${preflight_result.buyingPowerRequirement}")
-                
-                # Log regulatory fees if present
-                if hasattr(preflight_result, 'regulatoryFees') and preflight_result.regulatoryFees:
-                    fees = preflight_result.regulatoryFees
-                    self.logger.info(f"[PREFLIGHT] Regulatory Fees: SEC=${getattr(fees, 'secFee', 'N/A')}, TAF=${getattr(fees, 'tafFee', 'N/A')}, OCC=${getattr(fees, 'occFee', 'N/A')}")
-                
-                # Log margin impact if present
-                if hasattr(preflight_result, 'marginImpact') and preflight_result.marginImpact:
-                    margin = preflight_result.marginImpact
-                    self.logger.info(f"[PREFLIGHT] Margin Impact: Usage=${getattr(margin, 'marginUsageImpact', 'N/A')}, Initial=${getattr(margin, 'initialMarginRequirement', 'N/A')}")
-                
-                # Log price increment info if present
-                if hasattr(preflight_result, 'priceIncrement') and preflight_result.priceIncrement:
-                    increment = preflight_result.priceIncrement
-                    self.logger.info(f"[PREFLIGHT] Price Increments: Below $3=${getattr(increment, 'incrementBelow3', 'N/A')}, Above $3=${getattr(increment, 'incrementAbove3', 'N/A')}, Current=${getattr(increment, 'currentIncrement', 'N/A')}")
-                
-                # Summary line showing the key financial impact
-                cost = getattr(preflight_result, 'estimatedCost', 'N/A')
-                proceeds = getattr(preflight_result, 'estimatedProceeds', 'N/A')
-                commission = getattr(preflight_result, 'estimatedCommission', 'N/A')
-                self.logger.info(f"[PREFLIGHT] SUMMARY: Cost=${cost}, Proceeds=${proceeds}, Commission=${commission}")
-                
-                if process.execute_mode:
-                    # Create actual order request (different from preflight)
-                    import uuid
-                    order_id = str(uuid.uuid4())
-                    order_request = self._create_close_spread_order(process, account_id, order_id)
-                    if not order_request:
-                        self.logger.error(f"Failed to create order for process {process.process_id}")
+                try:
+                    # Safety check: stop if no remaining quantity
+                    if process.remaining_quantity <= 0:
+                        self.logger.info(f"[COMPLETE] Process {process.process_id} - all contracts filled")
+                        process.status = ProcessStatus.COMPLETED
+                        return
+                    
+                    # Check if we've reached target
+                    if process.current_price < process.target_price:
+                        self.logger.info(f"[TARGET] Process {process.process_id} reached target bid price ${process.target_price:.2f}")
                         break
                     
-                    # Place the actual order using remaining quantity
-                    order_response = place_multileg_order(self.client, account_id, order_request)
-                    if order_response.ok:
-                        process.last_order_id = order_response.orderId
-                        self.logger.info(f"[ORDER] Placed order {order_response.orderId} for {process.remaining_quantity} contracts at ${process.current_price:.2f}")
-                        
-                        # Wait for fill or timeout with partial fill handling
-                        is_complete, filled_qty = self._wait_for_fill_with_partial_handling(process, stop_event, account_id)
-                        
-                        # Update remaining quantity based on fills
-                        if filled_qty > 0:
-                            process.remaining_quantity -= filled_qty
-                            self.logger.info(f"[PROGRESS] Filled {filled_qty} contracts, {process.remaining_quantity} remaining")
-                        
-                        # If completely filled, we're done
-                        if is_complete or process.remaining_quantity <= 0:
-                            process.status = ProcessStatus.COMPLETED
-                            self.logger.info(f"[SUCCESS] Process {process.process_id} completed successfully - all {process.quantity} contracts filled")
+                    # Create and preflight order
+                    self.logger.info(f"[ATTEMPT] Attempt {process.attempts + 1}/{process.max_attempts}: Testing order at ${process.current_price:.2f}")
+                    preflight_request = self._create_close_spread_preflight(process, account_id)
+                    if not preflight_request:
+                        self._emergency_stop_process(process, account_id, "Failed to create close spread preflight request")
+                        return
+                    
+                    # Print preflight details - handle Pydantic model format
+                    if isinstance(preflight_request, MultiLegPreflightRequest):
+                        limit_price = float(preflight_request.limitPrice)
+                        legs = preflight_request.legs
+                        quantity = preflight_request.quantity
+                        self.logger.info(f"[PREFLIGHT] Preflight details: {len(legs)} legs, quantity: {quantity}, limit: ${limit_price:.2f}")
+                        for i, leg in enumerate(legs):
+                            side_str = leg.side if isinstance(leg.side, str) else leg.side.value
+                            close_str = leg.openCloseIndicator if isinstance(leg.openCloseIndicator, str) else leg.openCloseIndicator.value
+                            self.logger.info(f"   Leg {i+1}: {side_str} {leg.ratioQuantity} {leg.instrument.symbol} ({close_str})")
+                    
+                    # Debug: Log the preflight request data
+                    self.logger.info(f"[DEBUG] Preflight request data: {preflight_request}")
+                    
+                    # Preflight the order
+                    try:
+                        preflight_result = preflight_multi_leg(self.client, account_id, preflight_request)
+                    except Exception as preflight_error:
+                        self._emergency_stop_process(process, account_id, f"Close spread preflight API error: {preflight_error}")
+                        return
+                    
+                    if preflight_result is None or hasattr(preflight_result, 'errorMessage'):
+                        error_msg = getattr(preflight_result, 'errorMessage', 'Unknown error') if preflight_result else 'API request failed'
+                        self._emergency_stop_process(process, account_id, f"Close spread preflight failed: {error_msg}")
+                        return
+                    
+                    self.logger.info(f"[PREFLIGHT] Preflight successful for process {process.process_id} at ${process.current_price:.2f}")
+                    
+                    # Log the ENTIRE preflight response for debugging
+                    self.logger.info(f"[PREFLIGHT] FULL RESPONSE: {preflight_result}")
+                    self.logger.info(f"[PREFLIGHT] RESPONSE TYPE: {type(preflight_result)}")
+                    self.logger.info(f"[PREFLIGHT] RESPONSE DICT: {preflight_result.__dict__ if hasattr(preflight_result, '__dict__') else 'No __dict__'}")
+                    
+                    # Log all the preflight response details
+                    if hasattr(preflight_result, 'baseSymbol'):
+                        self.logger.info(f"[PREFLIGHT] Base Symbol: {preflight_result.baseSymbol}")
+                    if hasattr(preflight_result, 'strategyName'):
+                        self.logger.info(f"[PREFLIGHT] Strategy: {preflight_result.strategyName}")
+                    if hasattr(preflight_result, 'estimatedCost'):
+                        self.logger.info(f"[PREFLIGHT] Estimated Cost: ${preflight_result.estimatedCost}")
+                    if hasattr(preflight_result, 'estimatedProceeds'):
+                        self.logger.info(f"[PREFLIGHT] Estimated Proceeds: ${preflight_result.estimatedProceeds}")
+                    if hasattr(preflight_result, 'orderValue'):
+                        self.logger.info(f"[PREFLIGHT] Order Value: ${preflight_result.orderValue}")
+                    if hasattr(preflight_result, 'estimatedCommission'):
+                        self.logger.info(f"[PREFLIGHT] Commission: ${preflight_result.estimatedCommission}")
+                    if hasattr(preflight_result, 'buyingPowerRequirement'):
+                        self.logger.info(f"[PREFLIGHT] Buying Power Required: ${preflight_result.buyingPowerRequirement}")
+                    
+                    # Log regulatory fees if present
+                    if hasattr(preflight_result, 'regulatoryFees') and preflight_result.regulatoryFees:
+                        fees = preflight_result.regulatoryFees
+                        self.logger.info(f"[PREFLIGHT] Regulatory Fees: SEC=${getattr(fees, 'secFee', 'N/A')}, TAF=${getattr(fees, 'tafFee', 'N/A')}, OCC=${getattr(fees, 'occFee', 'N/A')}")
+                    
+                    # Log margin impact if present
+                    if hasattr(preflight_result, 'marginImpact') and preflight_result.marginImpact:
+                        margin = preflight_result.marginImpact
+                        self.logger.info(f"[PREFLIGHT] Margin Impact: Usage=${getattr(margin, 'marginUsageImpact', 'N/A')}, Initial=${getattr(margin, 'initialMarginRequirement', 'N/A')}")
+                    
+                    # Log price increment info if present
+                    if hasattr(preflight_result, 'priceIncrement') and preflight_result.priceIncrement:
+                        increment = preflight_result.priceIncrement
+                        self.logger.info(f"[PREFLIGHT] Price Increments: Below $3=${getattr(increment, 'incrementBelow3', 'N/A')}, Above $3=${getattr(increment, 'incrementAbove3', 'N/A')}, Current=${getattr(increment, 'currentIncrement', 'N/A')}")
+                    
+                    # Summary line showing the key financial impact
+                    cost = getattr(preflight_result, 'estimatedCost', 'N/A')
+                    proceeds = getattr(preflight_result, 'estimatedProceeds', 'N/A')
+                    commission = getattr(preflight_result, 'estimatedCommission', 'N/A')
+                    self.logger.info(f"[PREFLIGHT] SUMMARY: Cost=${cost}, Proceeds=${proceeds}, Commission=${commission}")
+                    
+                    if process.execute_mode:
+                        # Create actual order request (different from preflight)
+                        import uuid
+                        order_id = str(uuid.uuid4())
+                        order_request = self._create_close_spread_order(process, account_id, order_id)
+                        if not order_request:
+                            self._emergency_stop_process(process, account_id, "Failed to create close spread order request")
                             return
                         
-                        # Cancel any unfilled portion and verify cancellation
-                        if process.last_order_id:
-                            cancel_success = self._cancel_order_with_verification(process, account_id)
-                            if not cancel_success:
-                                self.logger.error(f"[ERROR] Failed to cancel order {process.last_order_id} - stopping process for safety")
-                                process.status = ProcessStatus.ERROR
+                        # Place the actual order using remaining quantity
+                        try:
+                            order_id = place_multileg_order(self.client, account_id, order_request)
+                        except Exception as order_error:
+                            self._emergency_stop_process(process, account_id, f"Close spread order placement error: {order_error}")
+                            return
+                            
+                        if order_id:  # If we got an order ID, the order was successful
+                            process.last_order_id = order_id
+                            self.logger.info(f"[ORDER] Placed order {order_id} for {process.remaining_quantity} contracts at ${process.current_price:.2f}")
+                            
+                            # Wait for fill or timeout with partial fill handling
+                            try:
+                                is_complete, filled_qty = self._wait_for_fill_with_partial_handling(process, stop_event, account_id)
+                            except Exception as fill_error:
+                                self._emergency_stop_process(process, account_id, f"Close spread fill monitoring error: {fill_error}")
                                 return
+                            
+                            # Update remaining quantity based on fills
+                            if filled_qty > 0:
+                                process.remaining_quantity -= filled_qty
+                                self.logger.info(f"[PROGRESS] Filled {filled_qty} contracts, {process.remaining_quantity} remaining")
+                            
+                            # If completely filled, we're done
+                            if is_complete or process.remaining_quantity <= 0:
+                                process.status = ProcessStatus.COMPLETED
+                                self.logger.info(f"[SUCCESS] Process {process.process_id} completed successfully - all {process.quantity} contracts filled")
+                                return
+                            
+                            # Cancel any unfilled portion and verify cancellation
+                            if process.last_order_id:
+                                cancel_success = self._cancel_order_with_verification(process, account_id)
+                                if not cancel_success:
+                                    self._emergency_stop_process(process, account_id, f"Failed to cancel close spread order {process.last_order_id}")
+                                    return
+                        else:
+                            self._emergency_stop_process(process, account_id, "Close spread order placement returned no order ID")
+                            return
                     else:
-                        self.logger.error(f"Failed to place order: {order_response.errorMessage}")
-                else:
-                    # Dry run - just log what would happen
-                    self.logger.info(f"DRY RUN: Would place order for {process.remaining_quantity} contracts at ${process.current_price:.2f}")
-                    time.sleep(1)  # Brief pause for dry run
-                
-                # Move to next price level (walking down for closing)
-                next_price = round(process.current_price + process.increment, 2)  # increment is negative for closing, round to penny
-                self.logger.info(f"[WALK] Walking price down from ${process.current_price:.2f} to ${next_price:.2f}")
-                process.current_price = next_price
-                process.attempts += 1
-                process.last_update = datetime.now()
+                        # Dry run - just log what would happen
+                        self.logger.info(f"DRY RUN: Would place order for {process.remaining_quantity} contracts at ${process.current_price:.2f}")
+                        time.sleep(1)  # Brief pause for dry run
+                    
+                    # Move to next price level (walking down for closing)
+                    next_price = round(process.current_price + process.increment, 2)  # increment is negative for closing, round to penny
+                    self.logger.info(f"[WALK] Walking price down from ${process.current_price:.2f} to ${next_price:.2f}")
+                    process.current_price = next_price
+                    process.attempts += 1
+                    process.last_update = datetime.now()
+                    
+                except Exception as loop_error:
+                    self._emergency_stop_process(process, account_id, f"Close spread loop iteration error: {loop_error}")
+                    return
             
             process.status = ProcessStatus.COMPLETED
             
         except Exception as e:
-            self.logger.error(f"Error in close spread process {process.process_id}: {e}")
-            process.status = ProcessStatus.ERROR
+            self._emergency_stop_process(process, account_id, f"Close spread process error: {e}")
     
     def _create_open_spread_preflight(self, process: WalkLimitProcess, account_id: str) -> Optional[MultiLegPreflightRequest]:
         """Create multi-leg preflight request for opening a spread."""
@@ -726,6 +760,44 @@ class WalkLimitEngine:
             self.logger.error(f"Error checking final order status: {e}")
             return False, 0
 
+    def _emergency_stop_process(self, process: WalkLimitProcess, account_id: str, error_msg: str):
+        """
+        Emergency stop for a process - cancel all orders and mark as error.
+        
+        Args:
+            process: The process to stop
+            account_id: Account ID for order cancellation
+            error_msg: Error message to log
+        """
+        self.logger.error(f"[EMERGENCY STOP] Process {process.process_id}: {error_msg}")
+        process.status = ProcessStatus.ERROR
+        
+        # Cancel any pending order
+        if process.last_order_id:
+            try:
+                self.logger.warning(f"[EMERGENCY] Cancelling order {process.last_order_id}")
+                cancel_order(self.client, account_id, process.last_order_id)
+                
+                # Quick verification (reduced timeout for emergency)
+                for attempt in range(5):  # Only 5 attempts in emergency
+                    try:
+                        order_status = get_order(self.client, account_id, process.last_order_id)
+                        if order_status.status in ['CANCELLED', 'REJECTED']:
+                            self.logger.info(f"[EMERGENCY] Order {process.last_order_id} successfully cancelled")
+                            break
+                        elif order_status.status in ['FILLED', 'PARTIALLY_FILLED']:
+                            self.logger.warning(f"[EMERGENCY] Order {process.last_order_id} filled before cancel! Status: {order_status.status}")
+                            break
+                        time.sleep(0.5)  # Shorter delay in emergency
+                    except Exception as cancel_check_error:
+                        self.logger.error(f"[EMERGENCY] Error checking cancel status: {cancel_check_error}")
+                        time.sleep(0.5)
+                else:
+                    self.logger.error(f"[EMERGENCY] Could not verify cancellation of order {process.last_order_id}")
+                    
+            except Exception as cancel_error:
+                self.logger.error(f"[EMERGENCY] Failed to cancel order {process.last_order_id}: {cancel_error}")
+
     def _cancel_order_with_verification(self, process: WalkLimitProcess, account_id: str) -> bool:
         """
         Cancel order and verify it was actually cancelled.
@@ -815,29 +887,81 @@ class WalkLimitEngine:
         return result
     
     def cancel_process(self, process_id: str) -> bool:
-        """Cancel a running process."""
+        """Cancel a running process using emergency stop logic."""
         if process_id not in self.processes:
             return False
+        
+        process = self.processes[process_id]
         
         # Signal thread to stop
         if process_id in self.stop_events:
             self.stop_events[process_id].set()
         
-        # Cancel any pending order
-        process = self.processes[process_id]
-        if process.last_order_id and process.execute_mode:
-            try:
-                account_id = config.get_default_account()
-                if account_id:
-                    cancel_order(self.client, account_id, process.last_order_id)
-            except Exception as e:
-                self.logger.error(f"Error cancelling order: {e}")
-        
-        process.status = ProcessStatus.CANCELLED
-        process.last_update = datetime.now()
+        # Use emergency stop logic for consistency and safety
+        account_id = config.get_default_account()
+        if account_id:
+            self._emergency_stop_process(process, account_id, f"Process {process_id} cancelled by user")
+        else:
+            # Fallback if no account ID available
+            process.status = ProcessStatus.CANCELLED
+            process.last_update = datetime.now()
         
         return True
     
+    def emergency_cancel_all_orders(self, account_id: str):
+        """
+        Emergency cancellation of all active orders across all processes.
+        Called during Ctrl+C or other emergency exits.
+        """
+        self.logger.warning("[EMERGENCY] Cancelling ALL active orders due to emergency exit")
+        
+        cancelled_orders = []
+        failed_cancellations = []
+        
+        # Cancel orders from all active processes
+        for process_id, process in self.processes.items():
+            if process.last_order_id and process.status in [ProcessStatus.RUNNING, ProcessStatus.WAITING]:
+                try:
+                    self.logger.warning(f"[EMERGENCY] Cancelling order {process.last_order_id} from process {process_id}")
+                    cancel_order(self.client, account_id, process.last_order_id)
+                    cancelled_orders.append(process.last_order_id)
+                    
+                    # Mark process as stopped
+                    process.status = ProcessStatus.ERROR
+                    
+                except Exception as e:
+                    self.logger.error(f"[EMERGENCY] Failed to cancel order {process.last_order_id}: {e}")
+                    failed_cancellations.append(process.last_order_id)
+        
+        # Stop all threads
+        for process_id, stop_event in self.stop_events.items():
+            stop_event.set()
+        
+        if cancelled_orders:
+            self.logger.warning(f"[EMERGENCY] Sent cancellation requests for orders: {cancelled_orders}")
+        
+        if failed_cancellations:
+            self.logger.error(f"[EMERGENCY] Failed to cancel orders: {failed_cancellations}")
+            
+        # Quick verification of cancellations (reduced timeout for emergency)
+        if cancelled_orders:
+            self.logger.info("[EMERGENCY] Verifying order cancellations...")
+            time.sleep(2)  # Brief wait for cancellations to process
+            
+            for order_id in cancelled_orders:
+                try:
+                    order_status = get_order(self.client, account_id, order_id)
+                    if order_status.status in ['CANCELLED', 'REJECTED']:
+                        self.logger.info(f"[EMERGENCY] SUCCESS: Order {order_id} successfully cancelled")
+                    elif order_status.status in ['FILLED', 'PARTIALLY_FILLED']:
+                        self.logger.warning(f"[EMERGENCY] WARNING: Order {order_id} filled before cancellation: {order_status.status}")
+                    else:
+                        self.logger.warning(f"[EMERGENCY] UNCLEAR: Order {order_id} status unclear: {order_status.status}")
+                except Exception as e:
+                    self.logger.error(f"[EMERGENCY] Could not verify order {order_id}: {e}")
+        
+        return len(cancelled_orders), len(failed_cancellations)
+
     def wait_for_all_processes(self, timeout: Optional[int] = None) -> bool:
         """Wait for all background processes to complete.
         
@@ -875,32 +999,6 @@ class WalkLimitEngine:
             if process.status in [ProcessStatus.STARTING, ProcessStatus.RUNNING, ProcessStatus.WAITING]:
                 return True
         return False
-    
-    def cancel_all_processes(self) -> int:
-        """Cancel all active processes and their associated orders.
-        
-        This will:
-        1. Stop all background processes
-        2. Cancel all pending orders with the broker
-        3. Update process status to CANCELLED
-        
-        Returns:
-            int: Number of processes that were cancelled
-        """
-        cancelled_count = 0
-        process_ids = list(self.processes.keys())
-        
-        self.logger.info(f"Cancelling all processes ({len(process_ids)} total)")
-        
-        for process_id in process_ids:
-            process = self.processes[process_id]
-            if process.status not in [ProcessStatus.CANCELLED, ProcessStatus.COMPLETED, ProcessStatus.ERROR]:
-                self.logger.info(f"Cancelling process {process_id} (Order: {process.last_order_id})")
-                if self.cancel_process(process_id):
-                    cancelled_count += 1
-        
-        self.logger.info(f"Successfully cancelled {cancelled_count} processes")
-        return cancelled_count
     
     def get_active_orders(self) -> Dict[str, str]:
         """Get all active orders that would be cancelled.

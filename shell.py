@@ -9,6 +9,7 @@ import sys
 import cmd
 import shlex
 import argparse
+import signal
 from typing import List, Dict, Optional
 import logging
 from datetime import datetime
@@ -468,8 +469,17 @@ Initializing...
                 for process_id, order_id in active_orders.items():
                     print(f"  Process {process_id[:8]}: Order {order_id}")
                 
-            count = self.walk_engine.cancel_all_processes()
-            print(f"{Colors.GREEN}✅ Cancelled {count} processes and their orders{Colors.END}")
+            # Use emergency cancellation for consistency and safety
+            account_id = self.default_account
+            if not account_id:
+                print(f"{Colors.RED}❌ No default account set. Use 'set default account <id>' first{Colors.END}")
+                return
+                
+            cancelled, failed = self.walk_engine.emergency_cancel_all_orders(account_id)
+            if failed > 0:
+                print(f"{Colors.YELLOW}⚠️  Cancelled {cancelled} orders, {failed} failed to cancel{Colors.END}")
+            else:
+                print(f"{Colors.GREEN}✅ Successfully cancelled all {cancelled} orders{Colors.END}")
         else:
             process_id = args.strip()
             if self.walk_engine.cancel_process(process_id):
@@ -545,7 +555,17 @@ Initializing...
                     if self.walk_engine.wait_for_all_processes(timeout=None):
                         print(f"{Colors.GREEN}✅ All processes completed{Colors.END}")
             except KeyboardInterrupt:
-                print(f"{Colors.YELLOW}\n⚠️  Force exiting with active processes{Colors.END}")
+                print(f"{Colors.YELLOW}\n⚠️  Ctrl+C detected - Emergency cancelling all orders!{Colors.END}")
+                if self.walk_engine and hasattr(self, 'default_account_id'):
+                    try:
+                        cancelled, failed = self.walk_engine.emergency_cancel_all_orders(self.default_account_id)
+                        if cancelled > 0:
+                            print(f"{Colors.GREEN}✅ Emergency cancelled {cancelled} orders{Colors.END}")
+                        if failed > 0:
+                            print(f"{Colors.RED}❌ Failed to cancel {failed} orders{Colors.END}")
+                    except Exception as e:
+                        print(f"{Colors.RED}❌ Error during emergency cancellation: {e}{Colors.END}")
+                print(f"{Colors.YELLOW}⚠️  Force exiting with active processes{Colors.END}")
         
         print(f"{Colors.BOLD}👋 Goodbye!{Colors.END}")
         if self.client:
@@ -852,16 +872,60 @@ Initializing...
         return status_colors.get(status, Colors.WHITE)
 
 
+# Global reference to shell for signal handler
+_shell_instance = None
+
+def signal_handler(signum, frame):
+    """Handle SIGINT (Ctrl+C) by cancelling all orders before exit."""
+    print(f"\n{Colors.YELLOW}⚠️  Signal {signum} received - Emergency shutdown!{Colors.END}")
+    if _shell_instance and _shell_instance.walk_engine and hasattr(_shell_instance, 'default_account'):
+        try:
+            account_id = _shell_instance.default_account
+            if account_id:
+                cancelled, failed = _shell_instance.walk_engine.emergency_cancel_all_orders(account_id)
+                if cancelled > 0:
+                    print(f"{Colors.GREEN}✅ Emergency cancelled {cancelled} orders{Colors.END}")
+                if failed > 0:
+                    print(f"{Colors.RED}❌ Failed to cancel {failed} orders{Colors.END}")
+            else:
+                print(f"{Colors.YELLOW}⚠️  No default account set - cannot cancel orders{Colors.END}")
+        except Exception as e:
+            print(f"{Colors.RED}❌ Error during emergency cancellation: {e}{Colors.END}")
+    print(f"{Colors.BOLD}👋 Emergency exit complete!{Colors.END}")
+    sys.exit(0)
+
 def main():
     """Main entry point."""
+    global _shell_instance
+    
+    # Set up signal handler for Ctrl+C
+    signal.signal(signal.SIGINT, signal_handler)
+    
+    shell = None
     try:
         shell = PublicBrokerageShell()
+        _shell_instance = shell  # Store for signal handler
         shell.cmdloop()
     except KeyboardInterrupt:
+        print(f"\n{Colors.YELLOW}⚠️  Ctrl+C detected - Emergency shutdown initiated!{Colors.END}")
+        if shell and shell.walk_engine and hasattr(shell, 'default_account_id'):
+            try:
+                cancelled, failed = shell.walk_engine.emergency_cancel_all_orders(shell.default_account_id)
+                if cancelled > 0:
+                    print(f"{Colors.GREEN}✅ Emergency cancelled {cancelled} orders{Colors.END}")
+                if failed > 0:
+                    print(f"{Colors.RED}❌ Failed to cancel {failed} orders{Colors.END}")
+            except Exception as e:
+                print(f"{Colors.RED}❌ Error during emergency cancellation: {e}{Colors.END}")
         print(f"\n{Colors.BOLD}👋 Goodbye!{Colors.END}")
         sys.exit(0)
     except Exception as e:
         print(f"{Colors.RED}❌ Shell error: {e}{Colors.END}")
+        if shell and shell.walk_engine and hasattr(shell, 'default_account_id'):
+            try:
+                shell.walk_engine.emergency_cancel_all_orders(shell.default_account_id)
+            except:
+                pass  # Don't let cleanup errors mask the original error
         sys.exit(1)
 
 

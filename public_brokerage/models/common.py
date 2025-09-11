@@ -59,6 +59,7 @@ class TimeInForce(str, Enum):
     """Time in force for orders."""
     DAY = "DAY"
     GTC = "GTC"  # Good Till Cancelled
+    GTD = "GTD"  # Good Till Date
     IOC = "IOC"  # Immediate or Cancel
     FOK = "FOK"  # Fill or Kill
 

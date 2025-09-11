@@ -204,5 +204,8 @@ def cancel_order(
         endpoint=f"/userapigateway/trading/{account_id}/order/{order_id}"
     )
     
-    # Handle response (should be 200 with no body)
-    client._handle_response(response)
+    # Cancel order returns 200 with no response body, just check status
+    if response.status_code != 200:
+        raise Exception(f"Cancel order failed with status {response.status_code}")
+    
+    # Success - no need to parse empty response body

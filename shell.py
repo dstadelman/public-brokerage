@@ -335,7 +335,8 @@ Initializing...
                 parsed_args.long_strike,
                 parsed_args.quantity,
                 parsed_args.max_wait_time,
-                self.default_account
+                self.default_account,
+                parsed_args.execute
             )
             
             if not confirmed:
@@ -404,7 +405,8 @@ Initializing...
                 parsed_args.symbol.upper(),
                 spreads,
                 parsed_args.max_wait_time,
-                self.default_account
+                self.default_account,
+                parsed_args.execute
             )
             
             if not confirmed:

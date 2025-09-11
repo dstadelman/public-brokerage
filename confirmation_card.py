@@ -35,7 +35,8 @@ class ConfirmationCard:
         long_strike: float,
         quantity: int,
         max_wait_time: int = 42,
-        account_id: Optional[str] = None
+        account_id: Optional[str] = None,
+        execute: bool = False
     ) -> bool:
         """
         Display confirmation card for opening a call spread.
@@ -88,21 +89,19 @@ class ConfirmationCard:
             print("\n🟢 LONG LEG:")
             self._display_option_leg(long_chain, "BUY", quantity)
             
-            # Calculate spread pricing - for opening a debit call spread
-            # We buy the long option (pay ask) and sell the short option (receive bid)
-            # Net debit = long_ask - short_bid (what we pay)
-            # Net credit = long_bid - short_ask (best case scenario)
-            spread_bid = long_chain['bid'] - short_chain['ask']  # Best price we could get
-            spread_ask = long_chain['ask'] - short_chain['bid']  # Worst price we'd pay
-            spread_bid = max(spread_bid, 0.0)
-            spread_ask = max(spread_ask, 0.0)
+            # Calculate spread pricing for opening call spreads
+            # For opening: We buy the long option and sell the short option
+            # spread_bid = best price we could get (what market will pay us)
+            # spread_ask = worst price we'd pay (what market will charge us)
+            spread_bid = long_chain['bid'] - short_chain['ask']  # Best execution price
+            spread_ask = long_chain['ask'] - short_chain['bid']  # Worst execution price  
             spread_mid = (spread_bid + spread_ask) / 2
             
             print("\n💰 SPREAD PRICING:")
             print(f"   Bid: ${spread_bid:.2f}")
             print(f"   Ask: ${spread_ask:.2f}")
             print(f"   Mid: ${spread_mid:.2f}")
-            print(f"   Width: ${spread_ask - spread_bid:.2f}")
+            print(f"   Width: ${abs(spread_ask - spread_bid):.2f}")
             
             # Calculate risk metrics
             spread_width = abs(long_strike - short_strike)
@@ -131,10 +130,16 @@ class ConfirmationCard:
             
             # Display execution details
             print(f"\n⚙️  EXECUTION DETAILS:")
-            print(f"   Mode: DRY RUN (simulation only)")
-            print(f"   Strategy: Walk Limit Order")
-            print(f"   Starting Price: ${spread_bid:.2f}")
-            print(f"   Max Wait Time: {max_wait_time} seconds per increment")
+            if execute:
+                print(f"   Mode: LIVE EXECUTION")
+                print(f"   Strategy: Walk Limit Order")
+                print(f"   Starting Price: ${spread_bid:.2f}")
+                print(f"   Max Wait Time: {max_wait_time} seconds per increment")
+            else:
+                print(f"   Mode: DRY RUN (simulation only)")
+                print(f"   Strategy: Walk Limit Order")
+                print(f"   Starting Price: ${spread_bid:.2f}")
+                print(f"   Max Wait Time: 1 second per increment (dry run)")
             print(f"   Commission: Will be calculated in preflight")
             
             # Days to expiration
@@ -171,7 +176,8 @@ class ConfirmationCard:
         symbol: str,
         spreads: List[CallSpread],
         max_wait_time: int = 42,
-        account_id: Optional[str] = None
+        account_id: Optional[str] = None,
+        execute: bool = False
     ) -> bool:
         """
         Display confirmation card for closing call spreads.
@@ -271,7 +277,12 @@ class ConfirmationCard:
             print(f"   Total Spreads: {total_quantity}")
             print(f"   Est. Closing Credit: ${total_current_value:.2f}")
             print(f"   Strategy: Walk Limit (Ask → Bid)")
-            print(f"   Max Wait Time: {max_wait_time} seconds per increment")
+            if execute:
+                print(f"   Mode: LIVE EXECUTION")
+                print(f"   Max Wait Time: {max_wait_time} seconds per increment")
+            else:
+                print(f"   Mode: DRY RUN (simulation only)")
+                print(f"   Max Wait Time: 1 second per increment (dry run)")
             
             print("=" * 80)
             

@@ -368,9 +368,9 @@ class WalkLimitEngine:
                             self._emergency_stop_process(process, account_id, "Order placement returned no order ID")
                             return
                     else:
-                        # Dry run - just log what would happen
+                        # Dry run - just log what would happen and use short timeout
                         self.logger.info(f"DRY RUN: Would place order for {process.remaining_quantity} contracts at ${process.current_price:.2f}")
-                        time.sleep(1)  # Brief pause for dry run
+                        time.sleep(1)  # Brief pause for dry run - use 1 second instead of max_wait_time
                     
                     # Move to next price level
                     process.current_price = round(process.current_price + process.increment, 2)  # Round to penny
@@ -532,9 +532,9 @@ class WalkLimitEngine:
                             self._emergency_stop_process(process, account_id, "Close spread order placement returned no order ID")
                             return
                     else:
-                        # Dry run - just log what would happen
+                        # Dry run - just log what would happen and use short timeout
                         self.logger.info(f"DRY RUN: Would place order for {process.remaining_quantity} contracts at ${process.current_price:.2f}")
-                        time.sleep(1)  # Brief pause for dry run
+                        time.sleep(1)  # Brief pause for dry run - use 1 second instead of max_wait_time
                     
                     # Move to next price level (walking down for closing)
                     next_price = round(process.current_price + process.increment, 2)  # increment is negative for closing, round to penny

@@ -20,12 +20,14 @@ class TestCancellation(unittest.TestCase):
         # Create some mock processes with all required fields
         now = datetime.now()
         
+        from utils import format_osi_symbol
+        
         self.process1 = WalkLimitProcess(
             process_id="test1",
             symbol="SPY",
             strategy="open_call_spread",
-            short_symbol="SPY   240119C00420000",
-            long_symbol="SPY   240119C00425000",
+            short_symbol=format_osi_symbol("SPY", "2024-01-19", "C", 420.0),
+            long_symbol=format_osi_symbol("SPY", "2024-01-19", "C", 425.0),
             quantity=10,
             remaining_quantity=10,
             max_wait_time=60,
@@ -45,8 +47,8 @@ class TestCancellation(unittest.TestCase):
             process_id="test2",
             symbol="AAPL",
             strategy="close_call_spread",
-            short_symbol="AAPL  240119C00150000",
-            long_symbol="AAPL  240119C00155000",
+            short_symbol=format_osi_symbol("AAPL", "2024-01-19", "C", 150.0),
+            long_symbol=format_osi_symbol("AAPL", "2024-01-19", "C", 155.0),
             quantity=5,
             remaining_quantity=3,
             max_wait_time=60,

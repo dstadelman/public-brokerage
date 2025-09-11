@@ -23,6 +23,11 @@ from walk_limit_engine import WalkLimitEngine, WalkLimitProcess, ProcessStatus
 from public_brokerage.client import PublicBrokerageClient
 from public_brokerage.models.order import MultiLegPreflightResponse, RegulatoryFees, PriceIncrement
 from public_brokerage.models.common import Instrument, InstrumentType
+from utils import format_osi_symbol
+
+# Test option symbols using OSI formatter
+TEST_SHORT_SYMBOL = format_osi_symbol("ORCL", "2025-09-12", "C", 240.0)
+TEST_LONG_SYMBOL = format_osi_symbol("ORCL", "2025-10-17", "C", 240.0)
 
 
 class MockOrderStatus:
@@ -85,10 +90,12 @@ class WalkLimitEngineTest(unittest.TestCase):
         self.engine = WalkLimitEngine(self.mock_client)
         self.account_id = "TEST_ACCOUNT"
         
+        from utils import format_osi_symbol
+        
         # Mock spread data
         self.mock_spread = Mock()
-        self.mock_spread.short_symbol = "ORCL250912C00240000"
-        self.mock_spread.long_symbol = "ORCL251017C00240000"
+        self.mock_spread.short_symbol = TEST_SHORT_SYMBOL
+        self.mock_spread.long_symbol = TEST_LONG_SYMBOL
         self.mock_spread.quantity = 2
         
     def tearDown(self):
@@ -106,7 +113,7 @@ class WalkLimitEngineTest(unittest.TestCase):
         long_quote = MockQuoteResponse(bid="91.70", ask="93.05")
         mock_get_quotes.return_value = [short_quote, long_quote]
         
-        bid, ask = self.engine._get_spread_pricing("ORCL250912C00240000", "ORCL251017C00240000", self.account_id)
+        bid, ask = self.engine._get_spread_pricing(TEST_SHORT_SYMBOL, TEST_LONG_SYMBOL, self.account_id)
         
         # For closing: bid = long_bid - short_ask, ask = long_ask - short_bid
         expected_bid = 91.70 - 91.25  # 0.45
@@ -124,7 +131,7 @@ class WalkLimitEngineTest(unittest.TestCase):
         """Test spread pricing with API failure."""
         mock_get_quotes.side_effect = Exception("API Error")
         
-        bid, ask = self.engine._get_spread_pricing("ORCL250912C00240000", "ORCL251017C00240000", self.account_id)
+        bid, ask = self.engine._get_spread_pricing(TEST_SHORT_SYMBOL, TEST_LONG_SYMBOL, self.account_id)
         
         self.assertIsNone(bid)
         self.assertIsNone(ask)
@@ -160,8 +167,8 @@ class WalkLimitEngineTest(unittest.TestCase):
             process_id="test123",
             symbol="ORCL",
             strategy="close_call_spread",
-            short_symbol="ORCL250912C00240000",
-            long_symbol="ORCL251017C00240000", 
+            short_symbol=TEST_SHORT_SYMBOL,
+            long_symbol=TEST_LONG_SYMBOL, 
             quantity=2,
             remaining_quantity=2,
             max_wait_time=5,
@@ -196,8 +203,8 @@ class WalkLimitEngineTest(unittest.TestCase):
             process_id="test123",
             symbol="ORCL", 
             strategy="close_call_spread",
-            short_symbol="ORCL250912C00240000",
-            long_symbol="ORCL251017C00240000",
+            short_symbol=TEST_SHORT_SYMBOL,
+            long_symbol=TEST_LONG_SYMBOL,
             quantity=5,
             remaining_quantity=5,
             max_wait_time=5,
@@ -231,8 +238,8 @@ class WalkLimitEngineTest(unittest.TestCase):
             process_id="test123",
             symbol="ORCL",
             strategy="close_call_spread", 
-            short_symbol="ORCL250912C00240000",
-            long_symbol="ORCL251017C00240000",
+            short_symbol=TEST_SHORT_SYMBOL,
+            long_symbol=TEST_LONG_SYMBOL,
             quantity=5,
             remaining_quantity=5,
             max_wait_time=1,  # Short timeout
@@ -272,8 +279,8 @@ class WalkLimitEngineTest(unittest.TestCase):
             process_id="test123",
             symbol="ORCL",
             strategy="close_call_spread",
-            short_symbol="ORCL250912C00240000", 
-            long_symbol="ORCL251017C00240000",
+            short_symbol=TEST_SHORT_SYMBOL, 
+            long_symbol=TEST_LONG_SYMBOL,
             quantity=2,
             remaining_quantity=2,
             max_wait_time=30,
@@ -306,8 +313,8 @@ class WalkLimitEngineTest(unittest.TestCase):
             process_id="test123",
             symbol="ORCL",
             strategy="close_call_spread",
-            short_symbol="ORCL250912C00240000",
-            long_symbol="ORCL251017C00240000", 
+            short_symbol=TEST_SHORT_SYMBOL,
+            long_symbol=TEST_LONG_SYMBOL, 
             quantity=2,
             remaining_quantity=2,
             max_wait_time=30,
@@ -339,8 +346,8 @@ class WalkLimitEngineTest(unittest.TestCase):
             process_id="test123",
             symbol="ORCL",
             strategy="close_call_spread",
-            short_symbol="ORCL250912C00240000",
-            long_symbol="ORCL251017C00240000",
+            short_symbol=TEST_SHORT_SYMBOL,
+            long_symbol=TEST_LONG_SYMBOL,
             quantity=2,
             remaining_quantity=2,
             max_wait_time=30,
@@ -389,8 +396,8 @@ class WalkLimitEngineTest(unittest.TestCase):
             process_id="test123",
             symbol="ORCL",
             strategy="close_call_spread",
-            short_symbol="ORCL250912C00240000",
-            long_symbol="ORCL251017C00240000",
+            short_symbol=TEST_SHORT_SYMBOL,
+            long_symbol=TEST_LONG_SYMBOL,
             quantity=2,
             remaining_quantity=2,
             max_wait_time=1,  # Short timeout to speed up test
@@ -479,8 +486,8 @@ class WalkLimitEngineTest(unittest.TestCase):
             process_id="test123",
             symbol="ORCL",
             strategy="close_call_spread",
-            short_symbol="ORCL250912C00240000",
-            long_symbol="ORCL251017C00240000",
+            short_symbol=TEST_SHORT_SYMBOL,
+            long_symbol=TEST_LONG_SYMBOL,
             quantity=2,
             remaining_quantity=0,  # No remaining quantity
             max_wait_time=30,

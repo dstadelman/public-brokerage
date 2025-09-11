@@ -220,17 +220,11 @@ class WalkLimitEngine:
         return process_ids
     
     def _construct_option_symbol(self, underlying: str, expiration: str, strike: float) -> str:
-        """Construct option symbol using same format as confirmation_card.py"""
-        from datetime import datetime
+        """Construct option symbol using standardized OSI format"""
+        from utils import format_osi_symbol
         
-        # Format expiration date as YYMMDD
-        exp_formatted = datetime.strptime(expiration, '%Y-%m-%d').strftime('%y%m%d')
-        
-        # Format strike price - multiply by 100 and pad to 7 digits (like confirmation card)
-        strike_formatted = f"{int(strike * 100):07d}"
-        
-        # Build symbol: UNDERLYING + YYMMDD + C + 7-digit-strike
-        return f"{underlying}{exp_formatted}C{strike_formatted}"
+        # Use the standardized OSI formatter for call options
+        return format_osi_symbol(underlying, expiration, "C", strike)
     
     def _get_spread_pricing(self, short_symbol: str, long_symbol: str, account_id: str) -> tuple[Optional[float], Optional[float]]:
         """Get current bid/ask pricing for a spread using the same method as confirmation_card.py"""

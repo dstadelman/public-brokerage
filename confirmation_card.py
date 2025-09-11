@@ -48,29 +48,34 @@ class ConfirmationCard:
             print("📋 CALL SPREAD ORDER CONFIRMATION")
             print("=" * 80)
             
-            # Get underlying quote
-            underlying_quote = self._get_underlying_quote(symbol)
-            if not underlying_quote:
-                print(f"❌ Could not fetch quote for {symbol}")
-                return False
-            
-            print(f"📈 Underlying: {symbol} @ ${underlying_quote.last:.2f}")
-            print(f"📊 Change: ${underlying_quote.change:.2f} ({underlying_quote.changePercent:.2f}%)")
-            print(f"📦 Volume: {underlying_quote.volume:,}")
-            print("-" * 80)
-            
             # Get account ID if not provided
             if not account_id:
                 from config import config
                 account_id = config.get_default_account()
                 
             if not account_id:
-                print(f"❌ No account ID available for option data fetch")
+                print(f"❌ No account ID available for quote fetch")
                 return False
             
-            # Get option chain data for both legs
-            short_chain = self._get_option_data(symbol, short_expiration, short_strike, 'CALL', account_id)
-            long_chain = self._get_option_data(symbol, long_expiration, long_strike, 'CALL', account_id)
+            # Get underlying quote
+            underlying_quote = self._get_underlying_quote(symbol, account_id)
+            if not underlying_quote:
+                print(f"❌ Could not fetch quote for {symbol}")
+                return False
+            
+            print(f"📈 Underlying: {symbol} @ ${underlying_quote.last}")
+            if underlying_quote.bid and underlying_quote.ask:
+                print(f"📊 Bid/Ask: ${underlying_quote.bid} / ${underlying_quote.ask}")
+            if underlying_quote.volume:
+                print(f"📦 Volume: {underlying_quote.volume:,}")
+            print("-" * 80)
+            
+            # Get option chain data for both legs using OSI formatter
+            from utils import format_osi_symbol
+            short_symbol = format_osi_symbol(symbol, short_expiration, 'CALL', short_strike)
+            long_symbol = format_osi_symbol(symbol, long_expiration, 'CALL', long_strike)
+            short_chain = self._get_option_data_by_symbol(short_symbol, account_id)
+            long_chain = self._get_option_data_by_symbol(long_symbol, account_id)
             
             if not short_chain or not long_chain:
                 print("❌ Could not fetch option chain data")
@@ -110,10 +115,13 @@ class ConfirmationCard:
             print(f"   Max Profit: ${max_profit * quantity:.2f}")
             print(f"   Max Loss: ${max_loss * quantity:.2f}")
             print(f"   Break Even: ${break_even:.2f}")
-            print(f"   Risk/Reward: {max_loss/max_profit:.2f}:1")
+            if max_profit > 0:
+                print(f"   Risk/Reward: {max_loss/max_profit:.2f}:1")
+            else:
+                print(f"   Risk/Reward: N/A (Max profit is $0)")
             
             # Display Greeks
-            self._display_spread_greeks(short_chain, long_chain, quantity)
+            self._display_spread_greeks(short_chain, long_chain, quantity, account_id)
             
             # Display execution details
             print(f"\n⚙️  EXECUTION DETAILS:")
@@ -349,12 +357,12 @@ class ConfirmationCard:
         
         return max(spread_bid, 0.0), max(spread_ask, 0.0)
     
-    def _display_spread_greeks(self, short_option: Dict, long_option: Dict, quantity: int) -> None:
+    def _display_spread_greeks(self, short_option: Dict, long_option: Dict, quantity: int, account_id: str) -> None:
         """Display net Greeks for the spread."""
         try:
             # Get Greeks data
-            short_greeks = self._get_option_greeks(short_option['symbol'])
-            long_greeks = self._get_option_greeks(long_option['symbol'])
+            short_greeks = self._get_option_greeks(short_option['symbol'], account_id)
+            long_greeks = self._get_option_greeks(long_option['symbol'], account_id)
             
             if short_greeks and long_greeks:
                 # Calculate net Greeks (short position is negative)
@@ -371,17 +379,14 @@ class ConfirmationCard:
         except Exception as e:
             logger.warning(f"Could not fetch Greeks: {e}")
     
-    def _get_option_greeks(self, option_symbol: str) -> Optional[OptionGreeks]:
+    def _get_option_greeks(self, option_symbol: str, account_id: str) -> Optional[OptionGreeks]:
         """Get Greeks for a specific option."""
         try:
-            # Extract underlying from option symbol
-            underlying = option_symbol
-            for i, char in enumerate(option_symbol):
-                if char.isdigit():
-                    underlying = option_symbol[:i]
-                    break
-            
-            greeks_response = get_option_greeks(self.client, underlying)
+            greeks_response = get_option_greeks(self.client, account_id, option_symbol)
+            return greeks_response
+        except Exception as e:
+            logger.error(f"Error fetching Greeks for {option_symbol}: {e}")
+            return None
             
             for greek in greeks_response.greeks:
                 if greek.symbol == option_symbol:

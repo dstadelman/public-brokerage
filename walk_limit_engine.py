@@ -7,7 +7,7 @@ import uuid
 import time
 import threading
 from typing import Dict, List, Optional
-from datetime import datetime
+from datetime import datetime, date
 from dataclasses import dataclass
 from enum import Enum
 import logging
@@ -19,6 +19,7 @@ from public_brokerage.orders import (
 from public_brokerage.auth import ensure_access_token
 from public_brokerage.models.order import MultiLegOrderRequest, MultiLegPreflightRequest, OrderLeg, OrderType, MultiLegPreflightResponse, OrderResponse
 from public_brokerage.models.common import OrderSide, OpenCloseIndicator, InstrumentType, Instrument, Expiration, TimeInForce
+from public_brokerage.models.market_data import Quote
 from public_brokerage.auth import ensure_access_token
 from public_brokerage.market_data import get_quotes
 from config import config
@@ -246,10 +247,26 @@ class WalkLimitEngine:
             short_quote = quotes[0]
             long_quote = quotes[1]
             
-            # Verify quotes have data
-            if not (short_quote.bid and short_quote.ask and long_quote.bid and long_quote.ask):
-                self.logger.error("Missing bid/ask data in quotes")
-                return None, None
+            # Check if we have missing bid/ask data for either quote
+            short_has_data = short_quote.bid is not None and short_quote.ask is not None
+            long_has_data = long_quote.bid is not None and long_quote.ask is not None
+            
+            # If either quote is missing data, try to get it from the option chain
+            if not short_has_data or not long_has_data:
+                self.logger.warning("Missing bid/ask data in quotes, attempting fallback to option chain")
+                
+                # Try to get missing quotes from option chain
+                if not short_has_data:
+                    short_quote = self._get_quote_from_chain(short_symbol, account_id)
+                if not long_has_data:
+                    long_quote = self._get_quote_from_chain(long_symbol, account_id)
+                
+                # Re-check if we now have valid data
+                if not (short_quote and long_quote and 
+                        short_quote.bid is not None and short_quote.ask is not None and
+                        long_quote.bid is not None and long_quote.ask is not None):
+                    self.logger.error("Still missing bid/ask data after fallback attempts")
+                    return None, None
             
             # Calculate spread pricing exactly like confirmation_card.py does for closing spreads
             # Convert to float like confirmation_card.py does
@@ -262,6 +279,51 @@ class WalkLimitEngine:
         except Exception as e:
             self.logger.error(f"Error getting spread pricing: {e}")
             return None, None
+    
+    def _get_quote_from_chain(self, option_symbol: str, account_id: str) -> Optional[Quote]:
+        """
+        Get quote for a specific option by searching the option chain.
+        This is a fallback when direct quote API fails.
+        """
+        try:
+            from public_brokerage.market_data import get_option_chain
+            from utils.option_symbols import parse_osi_symbol
+            
+            # Parse option symbol using the existing utility function
+            try:
+                parsed = parse_osi_symbol(option_symbol)
+                underlying = parsed['underlying']
+                exp_date_str = parsed['expiration_date']
+                option_type = parsed['option_type']
+                strike = parsed['strike_price']
+                
+                # Convert expiration date string to date object
+                exp_date = datetime.strptime(exp_date_str, '%Y-%m-%d').date()
+                
+            except Exception as e:
+                self.logger.error(f"Could not parse option symbol {option_symbol}: {e}")
+                return None
+            
+            # Create underlying instrument
+            underlying_instrument = Instrument(symbol=underlying, type=InstrumentType.EQUITY)
+            
+            # Get option chain
+            chain = get_option_chain(self.client, account_id, underlying_instrument, exp_date)
+            
+            # Search for our specific option in the chain
+            options_to_search = chain.calls if option_type == 'C' else chain.puts
+            
+            for option in options_to_search:
+                if option.instrument.symbol == option_symbol and option.outcome == "SUCCESS":
+                    self.logger.info(f"Found quote for {option_symbol} in option chain: bid={option.bid}, ask={option.ask}")
+                    return option
+            
+            self.logger.warning(f"Option {option_symbol} not found in option chain")
+            return None
+            
+        except Exception as e:
+            self.logger.error(f"Error getting quote from chain for {option_symbol}: {e}")
+            return None
     
     def _run_open_spread_process(self, process: WalkLimitProcess, stop_event: threading.Event, account_id: str):
         """Run the walk limit process for opening a spread."""

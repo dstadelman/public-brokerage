@@ -99,15 +99,24 @@ def format_osi_symbol(
 def parse_osi_symbol(osi_symbol: str) -> dict:
     """
     Parse an OSI-compliant option symbol into its components.
+    Supports both standard 21-character format and condensed format.
     
     Args:
-        osi_symbol: 21-character OSI option symbol
+        osi_symbol: OSI option symbol (21-character padded or condensed format)
         
     Returns:
         Dictionary with keys: underlying, expiration_date, option_type, strike_price
         
     Example:
-        >>> parse_osi_symbol("MSFT  251219C00275000")
+        >>> parse_osi_symbol("MSFT  251219C00275000")  # 21-character format
+        {
+            'underlying': 'MSFT',
+            'expiration_date': '2025-12-19',
+            'option_type': 'C',
+            'strike_price': 275.0
+        }
+        
+        >>> parse_osi_symbol("MSFT251219C00275000")  # Condensed format
         {
             'underlying': 'MSFT',
             'expiration_date': '2025-12-19',
@@ -115,14 +124,31 @@ def parse_osi_symbol(osi_symbol: str) -> dict:
             'strike_price': 275.0
         }
     """
-    if len(osi_symbol) != 21:
-        raise ValueError(f"OSI symbol must be exactly 21 characters, got {len(osi_symbol)}")
+    # Find the last C or P in the symbol to locate option type
+    call_pos = osi_symbol.rfind('C')
+    put_pos = osi_symbol.rfind('P')
     
-    # Parse components
-    underlying = osi_symbol[:6].rstrip()  # Remove trailing spaces
-    exp_str = osi_symbol[6:12]
-    option_type = osi_symbol[12]
-    strike_str = osi_symbol[13:21]
+    if call_pos == -1 and put_pos == -1:
+        raise ValueError(f"No option type indicator (C or P) found in symbol: {osi_symbol}")
+    
+    # Get position of the option type indicator
+    type_pos = max(call_pos, put_pos)
+    option_type = osi_symbol[type_pos]
+    
+    # Extract components based on positions relative to option type
+    # The date is 6 characters before the option type
+    date_start_pos = type_pos - 6
+    if date_start_pos < 1:
+        raise ValueError(f"Invalid symbol format - insufficient characters before option type: {osi_symbol}")
+        
+    underlying = osi_symbol[:date_start_pos].rstrip()  # Remove trailing spaces
+    exp_str = osi_symbol[date_start_pos:type_pos]
+    
+    # Strike is 8 characters after option type
+    if len(osi_symbol) < type_pos + 9:
+        raise ValueError(f"Invalid symbol format - insufficient characters for strike price: {osi_symbol}")
+        
+    strike_str = osi_symbol[type_pos + 1:type_pos + 9]
     
     # Parse expiration date
     try:

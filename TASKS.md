@@ -1,212 +1,321 @@
 # Requirements
 
-Create a shell UI for the commands in the `cli.py`.
+This project implements a sophisticated options trading system with walk limit order execution. The system provides:
 
-In this UI, I can type different commands to interact with the Public Brokerage API.
+## Current Features
+- **Call Spread Trading**: Open and close call spreads with walk limit orders
+- **Position Analysis**: Analyze existing positions and identify spread opportunities
+- **Walk Limit Engine**: Incrementally walk order prices to improve fill rates
+- **Confirmation Cards**: Display detailed trade confirmations with risk analysis
+- **Portfolio Management**: View positions, P&L, and portfolio analytics
 
-something like
+## New Feature Requirements
 
-```bash
-> accounts
+### Single Leg Option Trading
+We need to add support for single-leg option trading to complement the existing spread trading functionality:
 
-# list accounts
+#### `open_position` Command
+- **Purpose**: Open individual option positions (calls or puts)
+- **Syntax**: `open_position <ticker> <expiration> <type> <strike> <quantity> [--max_wait_time=42] [--execute]`
+- **Parameters**:
+  - `ticker`: Underlying symbol (e.g., AAPL, SPY)
+  - `expiration`: Option expiration date (YYYY-MM-DD format)
+  - `type`: Option type (C for call, P for put)
+  - `strike`: Strike price (float)
+  - `quantity`: Number of contracts (positive = buy, negative = sell)
+  - `--max_wait_time`: Maximum time to wait per price level (default: 42 seconds)
+  - `--execute`: Execute actual orders (default: dry run)
 
-> set default account 123456
+#### `close_position` Command
+- **Purpose**: Close existing option positions using walk limit orders
+- **Syntax**: `close_position <ticker> <expiration> <type> <strike> <quantity> [--max_wait_time=42] [--execute]`
+- **Parameters**: Same as `open_position`
+- **Safety**: Must verify position exists in portfolio before allowing order
 
-# default set to account 123456
+### Design Goals
+- **Consistent UX**: Follow same patterns as existing spread commands
+- **Walk Limit Orders**: Use same incremental pricing strategy for better fills
+- **Risk Management**: Include all existing safety checks and confirmations
+- **Portfolio Integration**: Verify positions before closing trades
+- **Comprehensive Logging**: Detailed execution logging like existing features
 
-> show positions
+---
 
-# show positions for default account 123456
+# TASKS
 
-> show positions 654321
+## Phase 1: Core Infrastructure for Single-Leg Options
 
-# show positions for account 654321
+### Task 1.1: Extend WalkLimitEngine for Single-Leg Support
+**File**: `walk_limit_engine.py`
+**Priority**: High
 
-> open_call_spread AAPL 2024-07-19 170 2024-08-16 175 1
+- [ ] Add `WalkLimitProcess` support for single-leg strategies
+  - [ ] Add strategy types: `'open_single_leg'`, `'close_single_leg'`
+  - [ ] Modify process dataclass to handle single option symbol instead of spread symbols
+- [ ] Implement `start_open_single_leg_process()` method
+  - [ ] Take parameters: symbol, expiration, option_type, strike, quantity, account_id, max_wait_time, execute_mode
+  - [ ] Construct OSI option symbol using existing utility functions
+  - [ ] Get current option pricing (with fallback to option chain like existing code)
+  - [ ] Calculate walk pricing based on bid/ask spread
+  - [ ] Initialize and start background process
+- [ ] Implement `start_close_single_leg_process()` method
+  - [ ] Similar to open but verify position exists first
+  - [ ] Use `get_account_portfolio()` to check current positions
+  - [ ] Validate requested close quantity doesn't exceed position size
+- [ ] Add `_run_single_leg_process()` method
+  - [ ] Similar to existing `_run_open_spread_process()` but for single legs
+  - [ ] Use `preflight_single_leg()` instead of `preflight_multi_leg()`
+  - [ ] Handle BUY/SELL sides based on positive/negative quantity
+  - [ ] Set correct `OpenCloseIndicator` (OPEN vs CLOSE)
 
-# run the background process to open a call spread, BUT do not actually place the orders, just run the preflight. Simulate running all the way to the ASK and then stopping if not filled.
+### Task 1.2: Add Single-Leg Confirmation Cards
+**File**: `confirmation_card.py`
+**Priority**: High
 
-> open_call_spread AAPL 2024-07-19 170 2024-08-16 175 1 --execute
+- [ ] Implement `display_single_leg_confirmation()` method
+  - [ ] Show option details (symbol, strike, expiration, type)
+  - [ ] Display current bid/ask/last pricing
+  - [ ] Show quantity and side (BUY/SELL, OPEN/CLOSE)
+  - [ ] Calculate estimated costs and commissions
+  - [ ] Display option Greeks (delta, gamma, theta, vega)
+  - [ ] Show risk metrics and breakeven analysis
+  - [ ] Include execution details (dry run vs live, max wait time)
+- [ ] Add helper methods for single-leg analysis
+  - [ ] `_get_single_option_greeks()` - retrieve Greeks for option
+  - [ ] `_calculate_single_leg_risk()` - calculate max profit/loss
+  - [ ] `_format_single_leg_display()` - format confirmation display
 
-# run the background process to open a call spread, and actually place the orders. Use default max_wait_time of 42 seconds.
+### Task 1.3: Position Validation for Close Orders
+**File**: `position_analyzer.py` (new methods)
+**Priority**: High
 
-> close_call_spread AAPL
+- [ ] Add `find_option_position()` method
+  - [ ] Search portfolio for specific option by symbol
+  - [ ] Return position details if found
+- [ ] Add `validate_close_quantity()` method
+  - [ ] Verify requested close quantity doesn't exceed position
+  - [ ] Handle partial closes appropriately
+- [ ] Extend existing position analysis for single legs
+  - [ ] Add single-leg position identification
+  - [ ] Include in portfolio summary displays
 
-# analyze the current position and the already running background processes.
-# if there is already a background process running to close a call spread for AAPL, do nothing and inform the user.
-# if there are no positions for AAPL, inform the user and do nothing.
-# use logic to split the position into the correct number of background processes to close all the call spreads for AAPL.
-# run the preflight check for each background process, simulating running all the way to the BID and then stopping if not filled.
+## Phase 2: Shell Command Implementation
 
-> close_call_spread AAPL --execute
+### Task 2.1: Add open_position Command
+**File**: `shell.py`
+**Priority**: High
 
-# same as above, but actually place the orders.
-```
+- [ ] Implement `do_open_position()` method
+  - [ ] Parse command line arguments using argparse
+  - [ ] Validate parameters (ticker, expiration date format, option type, strike, quantity)
+  - [ ] Check default account is set
+  - [ ] Call confirmation card for user approval
+  - [ ] Start walk limit process via engine
+  - [ ] Display process ID and monitoring instructions
+- [ ] Add command to help system
+- [ ] Add usage examples to help text
 
-* Automatically log in using the token in the `.env` file.
-* Automatically renew the token if expired.
+### Task 2.2: Add close_position Command  
+**File**: `shell.py`
+**Priority**: High
 
-* Commands to support:
-    - list accounts
-    - set account as "default" (should automatically set the last command as the default account for future commands and on restart)
-    - show positions for default account (or with specified account id)
-    - show option expirations for a given symbol
-    - show option chain for a given symbol and expiration
-    - open a call spread using walk limit order (runs in background)
-        - args: symbol, short_expiration, short_strike, long_expiration, long_strike, quantity, max_wait_time (optional in seconds, default 42), execute (this is a flag, if not set just run the preflight and show what would be done)
-        - process:
-            - fetch current bid/ask spread for the call spread
-            - divide the bid/ask spread into 20 increments (this is not practical if the bid/ask spread is less than .20, so in this case just use .01 increments, ie however many increments you can fit into the bid/ask spread up to 20)
-            - place a preflight request to confirm the order can be placed
-            - ONLY IF execute is true: place a limit order at the bid price + 1 increment
-                - if not filled in max_wait_time minute:
-                    - cancel the order
-                    - confirm that it was cancelled
-                    - preflight a new limit order at bid price + 2 increments
-                    - only IF execute is true: place a new limit order at the bid price + 2 increments
-            - repeat until filled (or we reach the ask price)
-    - close a call spread using walk limit order (runs in background)
-        - args: symbol, execute (this is a flag, if not set just run the preflight and show what would be done)
-        - optional args: max_wait_time (in seconds)
-        - use the current positions to elucidate the call spreads.
-            - there might be multiple call spreads for the same symbol... so we have to handle this case.
-            - example simple: 1 spread
-                - 2 short call
-                - 2 long call
-                - ANSWER: this can be done in one background process, closing both legs at the same time
-            - example complex: 10 spreads with different strikes
-                - 10 short calls
-                - 5 calls at one strike
-                - 5 calls at another strike
-                - ANSWER: this will have to be split into TWO background processes, closing 5 with one long strike and 5 with another long strike
-        - we use the same walk limit as above, BUT we are trying to SELL the call spread, so we start at the ASK price and walk down to the BID price.
-        
+- [ ] Implement `do_close_position()` method
+  - [ ] Similar to open_position but with position validation
+  - [ ] Check that position exists before allowing close
+  - [ ] Validate close quantity against position size
+  - [ ] Call appropriate confirmation card
+  - [ ] Start close process via engine
+- [ ] Add error handling for position not found
+- [ ] Add command to help system
 
-# Tasks
+## Phase 3: API Integration and Order Management
 
-## Core Shell Infrastructure
-- [x] Create `shell.py` - Main interactive shell program
-- [x] Implement persistent session management with user state
-- [x] Create config file (`~/.public_brokerage_config.json`) for storing default account
-- [x] Implement automatic authentication with token refresh
-- [x] Create command parser with support for flags and arguments
-- [x] Implement command history and auto-completion
-- [x] Add colored output and formatting for better UX
+### Task 3.1: Single-Leg Order Execution
+**Files**: `public_brokerage/orders.py`, models
+**Priority**: Medium
 
-## Basic Commands
-- [x] Implement `accounts` command - List all available accounts
-- [x] Implement `set default account <account_id>` command - Set default account for session
-- [x] Implement `show positions [account_id]` command - Show positions for default or specified account
-- [x] Implement `show options <symbol>` command - Show option expirations for symbol
-- [x] Implement `show chain <symbol> <expiration>` command - Show option chain
-- [x] Implement `quote <symbol>` command - Get real-time quote
-- [x] Implement `help` command - Show available commands and usage
+- [ ] Verify `preflight_single_leg()` handles all option scenarios
+  - [ ] Test with BUY/SELL for both calls and puts
+  - [ ] Verify OPEN/CLOSE indicators work correctly
+  - [ ] Test with various strike prices and expirations
+- [ ] Ensure `place_single_leg_order()` supports all parameters
+  - [ ] OrderSide: BUY/SELL based on quantity sign
+  - [ ] OpenCloseIndicator: OPEN for new positions, CLOSE for exits
+  - [ ] Proper error handling and validation
+- [ ] Add any missing model fields for single-leg support
 
-## Options Position Analysis
-- [x] Create `position_analyzer.py` - Analyze current positions to identify spreads
-- [x] Implement spread detection logic for call spreads
-- [x] Implement spread detection logic for put spreads
-- [x] Handle complex positions with multiple spreads of same underlying
-- [x] Create position grouping by underlying symbol and expiration
+### Task 3.2: Order Monitoring and Status
+**File**: `walk_limit_engine.py`
+**Priority**: Medium
 
-## Walk Limit Order Engine
-- [x] Create `walk_limit_engine.py` - Background process manager for walk limit orders
-- [x] Implement bid/ask spread calculation and increment logic
-- [x] Implement order placement with incremental price walking
-- [x] Add order monitoring and cancellation logic
-- [x] Implement retry mechanism with exponential backoff
-- [x] Add logging and status reporting for background processes
-- [x] Implement process synchronization to prevent duplicate orders
+- [ ] Extend status reporting for single-leg processes
+  - [ ] Show single option symbol instead of spread symbols
+  - [ ] Display appropriate progress metrics
+  - [ ] Handle partial fills correctly
+- [ ] Update process cancellation logic
+  - [ ] Ensure single-leg orders can be cancelled properly
+  - [ ] Clean up process state correctly
 
-## Order Confirmation System
-- [x] Create `confirmation_card.py` - Display detailed order confirmation cards
-- [x] Implement spread pricing calculator (bid/ask for the entire spread)
-- [x] Create option information formatter (strike, expiration, type, Greeks)
-- [x] Implement real-time market data fetching for confirmation display
-- [x] Add Greeks data integration from options endpoint
-- [x] Create interactive confirmation prompt (y/n/details/cancel)
-- [x] Implement order summary with cost basis and risk analysis
-- [x] Add market impact estimation and liquidity warnings
+## Phase 4: Manual Testing and Validation
 
-## Confirmation Card Features
-- [ ] **Opening Spread Confirmation Card:**
-  - [ ] Display underlying symbol and current stock price
-  - [ ] Show short leg: strike, expiration, bid/ask, Greeks (delta, gamma, theta, vega, rho)
-  - [ ] Show long leg: strike, expiration, bid/ask, Greeks (delta, gamma, theta, vega, rho)
-  - [ ] Calculate and display net spread bid/ask prices
-  - [ ] Show maximum profit, maximum loss, and break-even point
-  - [ ] Display net delta, gamma, theta, vega exposure
-  - [ ] Show required buying power and margin impact
-  - [ ] Display estimated commission costs
-  - [ ] Show liquidity indicators (volume, open interest)
-- [ ] **Closing Spread Confirmation Card:**
-  - [ ] Display current position details (quantity, entry price, current P&L)
-  - [ ] Show current bid/ask for closing the spread
-  - [ ] Display current Greeks exposure being closed
-  - [ ] Calculate closing cost/credit and net P&L impact
-  - [ ] Show time decay impact if holding vs closing
-  - [ ] Display days to expiration and theta burn
-  - [ ] Show impact on overall portfolio Greeks and buying power
-- [ ] **Enhanced Confirmation Features:**
-  - [ ] Add real-time price updates while user reviews
-  - [ ] Implement spread width and risk/reward ratio calculations
-  - [ ] Add volatility analysis and IV rank information
-  - [ ] Show probability of profit based on current market conditions
-  - [ ] Display historical performance of similar spreads
-  - [ ] Add warning alerts for unusual market conditions
-  - [ ] Implement "details" option for extended analysis
+### Task 4.1: Manual Testing with Real Market Data
+**Files**: Manual testing scripts and documentation
+**Priority**: Medium
 
-## Open Call Spread Command
-- [x] Implement `open_call_spread <symbol> <short_exp> <short_strike> <long_exp> <long_strike> <qty> [--max_wait_time=42] [--execute]`
-- [x] Create multi-leg order construction for call spreads
-- [x] Implement preflight validation for spread orders
-- [x] Add current market data fetching for spread pricing
-- [x] **Create confirmation card display before execution**
-- [x] **Fetch and display Greeks for both legs of the spread**
-- [x] **Show net credit/debit and break-even analysis**
-- [x] **Implement user confirmation prompt with detailed spread info**
-- [x] Implement dry-run mode (without --execute flag)
-- [x] Add background process spawning for order execution (only after confirmation)
-- [x] Implement real-time status updates during execution
+- [ ] **Phase 1: Dry-Run Testing (No --execute flag)**
+  - [ ] Test buying calls: `open_position AAPL 2024-02-16 C 145.00 1`
+  - [ ] Test buying puts: `open_position AAPL 2024-02-16 P 145.00 1`
+  - [ ] Test selling calls: `open_position AAPL 2024-02-16 C 145.00 -1`
+  - [ ] Test selling puts: `open_position AAPL 2024-02-16 P 145.00 -1`
+  - [ ] Verify pricing calculations match option chain data
+  - [ ] Test walk limit order progression simulation
+  - [ ] Validate all confirmation cards display correctly
+  - [ ] Test position validation logic without actual orders
+- [ ] **Phase 2: Live Testing (With --execute flag)**
+  - [ ] Start with small quantities and liquid options
+  - [ ] Test buying calls: `open_position AAPL 2024-02-16 C 145.00 1 --execute`
+  - [ ] Test buying puts: `open_position AAPL 2024-02-16 P 145.00 1 --execute`
+  - [ ] Test selling calls: `open_position AAPL 2024-02-16 C 145.00 -1 --execute`
+  - [ ] Test selling puts: `open_position AAPL 2024-02-16 P 145.00 -1 --execute`
+  - [ ] Verify actual orders are placed and filled correctly
+  - [ ] Test real walk limit order progression with market data
+- [ ] Test `close_position` command safety features
+  - [ ] **Dry-run first**: `close_position AAPL 2024-02-16 C 145.00 1`
+  - [ ] Verify position validation works correctly
+  - [ ] Test error handling when position doesn't exist
+  - [ ] Test quantity validation (can't close more than you own)
+  - [ ] **Live testing**: `close_position AAPL 2024-02-16 C 145.00 1 --execute`
+  - [ ] Test partial position closes with real portfolio
+- [ ] Test edge cases and error scenarios
+  - [ ] Invalid expiration dates
+  - [ ] Non-existent strikes
+  - [ ] Market closed scenarios
+  - [ ] Network connectivity issues
 
-## Close Call Spread Command  
-- [x] Implement `close_call_spread <symbol> [--max_wait_time=42] [--execute]`
-- [x] Create position analysis to identify existing call spreads
-- [x] Handle multiple spreads for same underlying (split into separate processes)
-- [x] **Create confirmation card for closing spreads**
-- [x] **Show current position P&L and closing impact**
-- [x] **Display current bid/ask for closing the spread**
-- [x] **Show Greeks changes from closing the position**
-- [x] **Implement confirmation prompt with closing analysis**
-- [x] Implement spread closing logic (sell the spread)
-- [x] Add conflict detection for already running close processes
-- [x] Implement position validation before closing
-- [x] Add support for partial closes and complex position scenarios
+### Task 4.2: API Integration Testing
+**Files**: Test against real Public Brokerage API
+**Priority**: Medium
 
-## Background Process Management
-- [x] Create `process_manager.py` - Manage multiple concurrent trading processes
-- [x] Implement process status tracking and reporting
-- [x] Add process cancellation and cleanup
-- [x] Implement process persistence across shell sessions
-- [x] Add process conflict detection and resolution
-- [x] Create process logging and audit trail
-- [x] Implement process timeout and error handling
+- [ ] Test single-leg option API workflows
+  - [ ] **Get Option Expirations**:
+    ```bash
+    curl --request POST \
+      --url https://api.public.com/userapigateway/marketdata/{ACCOUNT_ID}/option-expirations \
+      --header 'Authorization: Bearer YOUR_ACCESS_TOKEN' \
+      --header 'Content-Type: application/json' \
+      --data '{"instrument": {"symbol": "AAPL", "type": "EQUITY"}}'
+    ```
+  - [ ] **Get Option Chain**:
+    ```bash
+    curl --request POST \
+      --url https://api.public.com/userapigateway/marketdata/{ACCOUNT_ID}/option-chain \
+      --header 'Authorization: Bearer YOUR_ACCESS_TOKEN' \
+      --header 'Content-Type: application/json' \
+      --data '{"instrument": {"symbol": "AAPL", "type": "EQUITY"}, "expirationDate": "2024-02-16"}'
+    ```
+  - [ ] **Get Option Quotes**:
+    ```bash
+    curl --request POST \
+      --url https://api.public.com/userapigateway/marketdata/{ACCOUNT_ID}/quotes \
+      --header 'Authorization: Bearer YOUR_ACCESS_TOKEN' \
+      --header 'Content-Type: application/json' \
+      --data '{"instruments": [{"symbol": "AAPL240216C00145000", "type": "OPTION"}]}'
+    ```
+  - [ ] **Preflight Single-Leg Order**:
+    ```bash
+    curl --request POST \
+      --url https://api.public.com/userapigateway/trading/{ACCOUNT_ID}/preflight/single-leg \
+      --header 'Authorization: Bearer YOUR_ACCESS_TOKEN' \
+      --header 'Content-Type: application/json' \
+      --data '{
+        "instrument": {"symbol": "AAPL240216C00145000", "type": "OPTION"},
+        "orderSide": "BUY",
+        "orderType": "LIMIT",
+        "expiration": {"timeInForce": "DAY"},
+        "quantity": "1",
+        "limitPrice": "7.50",
+        "openCloseIndicator": "OPEN"
+      }'
+    ```
+  - [ ] **Place Single-Leg Order**:
+    ```bash
+    curl --request POST \
+      --url https://api.public.com/userapigateway/trading/{ACCOUNT_ID}/order \
+      --header 'Authorization: Bearer YOUR_ACCESS_TOKEN' \
+      --header 'Content-Type: application/json' \
+      --data '{
+        "orderId": "550e8400-e29b-41d4-a716-446655440001",
+        "instrument": {"symbol": "AAPL240216C00145000", "type": "OPTION"},
+        "orderSide": "BUY",
+        "orderType": "LIMIT",
+        "expiration": {"timeInForce": "DAY"},
+        "quantity": "1",
+        "limitPrice": "7.50",
+        "openCloseIndicator": "OPEN"
+      }'
+    ```
+  - [ ] **Check Order Status**:
+    ```bash
+    curl --request GET \
+      --url https://api.public.com/userapigateway/trading/{ACCOUNT_ID}/order/550e8400-e29b-41d4-a716-446655440001 \
+      --header 'Authorization: Bearer YOUR_ACCESS_TOKEN'
+    ```
+  - [ ] **Get Portfolio Positions**:
+    ```bash
+    curl --request GET \
+      --url https://api.public.com/userapigateway/trading/{ACCOUNT_ID}/portfolio/v2 \
+      --header 'Authorization: Bearer YOUR_ACCESS_TOKEN'
+    ```
 
-## Advanced Features
-- [x] Add `status` command - Show all running background processes
-- [x] Add `cancel <process_id>` command - Cancel specific background process
-- [x] Add `cancel all` command - Cancel all running processes
-- [x] Implement `logs <process_id>` command - Show process execution logs
-- [ ] Add market hours validation for order placement
-- [ ] Implement position size validation and risk checks
-- [ ] Add support for put spreads (open_put_spread, close_put_spread)
+### Task 4.3: Documentation and Usage Examples
+**Files**: README.md, usage guides
+**Priority**: Low
 
-## Error Handling & Validation
-- [ ] Implement comprehensive input validation for all commands
-- [ ] Add market data validation (valid symbols, expirations, strikes)
-- [ ] Implement account balance and buying power checks
-- [ ] Add order size and position limit validation
-- [ ] Create user-friendly error messages and suggestions
-- [ ] Implement graceful handling of API rate limits
-- [ ] Add network connectivity checks and retry logic
+- [ ] Update README.md with new commands
+  - [ ] Add `open_position` and `close_position` examples
+  - [ ] Document command syntax and parameters
+  - [ ] Include risk management best practices
+- [ ] Create comprehensive usage examples
+  - [ ] **Buy a call**: `open_position AAPL 2024-02-16 C 145.00 1 --execute`
+  - [ ] **Sell a put**: `open_position SPY 2024-01-19 P 420.00 -2 --execute`
+  - [ ] **Close existing position**: `close_position AAPL 2024-02-16 C 145.00 1 --execute`
+  - [ ] **Dry-run testing**: `open_position TSLA 2024-03-15 C 200.00 1` (no --execute)
+- [ ] Document expected API responses and error handling
+- [ ] Add troubleshooting guide for common issues
+
+## Phase 5: Enhancement and Polish
+
+### Task 5.1: Advanced Features
+**Priority**: Low
+
+- [ ] Add support for Good-Till-Canceled (GTC) orders
+- [ ] Implement automatic position monitoring
+- [ ] Add profit/loss target functionality
+- [ ] Support for complex order types (stop-loss, etc.)
+
+### Task 5.2: Performance and Optimization
+**Priority**: Low
+
+- [ ] Optimize quote retrieval for single options
+- [ ] Cache option chain data to reduce API calls
+- [ ] Improve error handling and recovery
+- [ ] Add metrics and monitoring
+
+---
+
+## Implementation Priority
+
+1. **Phase 1** (Core Infrastructure) - Required foundation
+2. **Phase 2** (Shell Commands) - User interface implementation  
+3. **Phase 3** (API Integration) - Order execution functionality
+4. **Phase 4** (Testing) - Quality assurance
+5. **Phase 5** (Enhancements) - Nice-to-have features
+
+## Estimated Total Effort
+We're going to implement this together - no estimates needed!
+
+## Risk Considerations
+- API compatibility with single-leg orders
+- Position validation accuracy
+- Walk limit pricing for single options vs spreads
+- Order execution reliability for various option types

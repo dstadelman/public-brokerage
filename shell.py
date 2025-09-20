@@ -428,6 +428,199 @@ Initializing...
         except Exception as e:
             print(f"{Colors.RED}❌ Error starting close spread process: {e}{Colors.END}")
     
+    def do_open_position(self, args):
+        """Open a single-leg option position using walk limit orders."""
+        parser = argparse.ArgumentParser(prog='open_position', add_help=False)
+        parser.add_argument('symbol', help='Underlying symbol (e.g., AAPL)')
+        parser.add_argument('expiration', help='Option expiration (YYYY-MM-DD)')
+        parser.add_argument('option_type', choices=['C', 'P', 'CALL', 'PUT'], 
+                          help='Option type: C/CALL for calls, P/PUT for puts')
+        parser.add_argument('strike', type=float, help='Strike price')
+        parser.add_argument('quantity', type=int, help='Number of contracts (positive=buy, negative=sell)')
+        parser.add_argument('--max_wait_time', type=int, default=42, help='Max wait time per price level (seconds)')
+        parser.add_argument('--execute', action='store_true', help='Execute actual orders (default: dry run)')
+        
+        try:
+            parsed_args = parser.parse_args(shlex.split(args))
+        except SystemExit:
+            print("Usage: open_position <symbol> <expiration> <type> <strike> <quantity> [--max_wait_time=42] [--execute]")
+            print("Example: open_position AAPL 2024-02-16 C 145.00 1 --execute")
+            return
+        
+        if not self.default_account:
+            print(f"{Colors.RED}❌ No default account set. Use 'set default account <id>' first.{Colors.END}")
+            return
+        
+        try:
+            # Validate expiration date format
+            try:
+                datetime.strptime(parsed_args.expiration, '%Y-%m-%d')
+            except ValueError:
+                print(f"{Colors.RED}❌ Invalid expiration date format. Use YYYY-MM-DD{Colors.END}")
+                return
+            
+            # Normalize option type
+            option_type = parsed_args.option_type.upper()
+            if option_type in ['CALL', 'PUT']:
+                option_type = 'C' if option_type == 'CALL' else 'P'
+            
+            # Validate quantity is not zero
+            if parsed_args.quantity == 0:
+                print(f"{Colors.RED}❌ Quantity cannot be zero{Colors.END}")
+                return
+            
+            # Show confirmation card
+            confirmed = self.confirmation_card.display_single_leg_confirmation(
+                parsed_args.symbol.upper(),
+                parsed_args.expiration,
+                option_type,
+                parsed_args.strike,
+                parsed_args.quantity,
+                "open",
+                parsed_args.max_wait_time,
+                self.default_account,
+                parsed_args.execute
+            )
+            
+            if not confirmed:
+                return
+            
+            # Start walk limit process
+            process_id = self.walk_engine.start_open_single_leg_process(
+                parsed_args.symbol.upper(),
+                parsed_args.expiration,
+                option_type,
+                parsed_args.strike,
+                parsed_args.quantity,
+                self.default_account,
+                parsed_args.max_wait_time,
+                parsed_args.execute
+            )
+            
+            mode = "LIVE" if parsed_args.execute else "DRY RUN"
+            action = "BUY" if parsed_args.quantity > 0 else "SELL"
+            option_type_display = "CALL" if option_type == 'C' else "PUT"
+            print(f"{Colors.GREEN}🚀 Started {mode} {action} {option_type_display} process: {process_id}{Colors.END}")
+            print(f"Use 'status' to monitor progress")
+        
+        except Exception as e:
+            print(f"{Colors.RED}❌ Error starting open position process: {e}{Colors.END}")
+    
+    def do_close_position(self, args):
+        """Close a single-leg option position using walk limit orders."""
+        parser = argparse.ArgumentParser(prog='close_position', add_help=False)
+        parser.add_argument('symbol', help='Underlying symbol (e.g., AAPL)')
+        parser.add_argument('expiration', help='Option expiration (YYYY-MM-DD)')
+        parser.add_argument('option_type', choices=['C', 'P', 'CALL', 'PUT'], 
+                          help='Option type: C/CALL for calls, P/PUT for puts')
+        parser.add_argument('strike', type=float, help='Strike price')
+        parser.add_argument('quantity', type=int, help='Number of contracts to close (always positive - direction determined automatically)')
+        parser.add_argument('--max_wait_time', type=int, default=42, help='Max wait time per price level (seconds)')
+        parser.add_argument('--execute', action='store_true', help='Execute actual orders (default: dry run)')
+        
+        try:
+            parsed_args = parser.parse_args(shlex.split(args))
+        except SystemExit:
+            print("Usage: close_position <symbol> <expiration> <type> <strike> <quantity> [--max_wait_time=42] [--execute]")
+            print("Example: close_position AAPL 2024-02-16 C 145.00 1 --execute")
+            return
+        
+        if not self.default_account:
+            print(f"{Colors.RED}❌ No default account set. Use 'set default account <id>' first.{Colors.END}")
+            return
+        
+        try:
+            # Validate expiration date format
+            try:
+                datetime.strptime(parsed_args.expiration, '%Y-%m-%d')
+            except ValueError:
+                print(f"{Colors.RED}❌ Invalid expiration date format. Use YYYY-MM-DD{Colors.END}")
+                return
+            
+            # Normalize option type
+            option_type = parsed_args.option_type.upper()
+            if option_type in ['CALL', 'PUT']:
+                option_type = 'C' if option_type == 'CALL' else 'P'
+            
+            # Validate quantity is not zero
+            if parsed_args.quantity == 0:
+                print(f"{Colors.RED}❌ Quantity cannot be zero{Colors.END}")
+                return
+            
+            # Make quantity positive (user should only enter positive numbers)
+            close_contracts = abs(parsed_args.quantity)
+            
+            # Verify position exists
+            from utils.option_symbols import format_osi_symbol
+            option_symbol = format_osi_symbol(
+                parsed_args.symbol.upper(), 
+                parsed_args.expiration, 
+                option_type, 
+                parsed_args.strike
+            )
+            
+            portfolio = get_account_portfolio(self.client, self.default_account)
+            position = self.position_analyzer.find_option_position(portfolio.positions, option_symbol)
+            
+            if not position:
+                print(f"{Colors.RED}❌ No position found for {option_symbol}{Colors.END}")
+                return
+            
+            # Automatically determine correct sign based on position direction
+            current_quantity = float(position.quantity)
+            if current_quantity > 0:
+                # Long position - need negative quantity to sell
+                close_quantity = -close_contracts
+            elif current_quantity < 0:
+                # Short position - need positive quantity to buy back
+                close_quantity = close_contracts
+            else:
+                print(f"{Colors.RED}❌ Position has zero quantity{Colors.END}")
+                return
+            
+            # Validate close quantity
+            is_valid, message = self.position_analyzer.validate_close_quantity(position, close_quantity)
+            if not is_valid:
+                print(f"{Colors.RED}❌ {message}{Colors.END}")
+                return
+            
+            # Show confirmation card
+            confirmed = self.confirmation_card.display_single_leg_confirmation(
+                parsed_args.symbol.upper(),
+                parsed_args.expiration,
+                option_type,
+                parsed_args.strike,
+                close_quantity,
+                "close",
+                parsed_args.max_wait_time,
+                self.default_account,
+                parsed_args.execute
+            )
+            
+            if not confirmed:
+                return
+            
+            # Start walk limit process
+            process_id = self.walk_engine.start_close_single_leg_process(
+                parsed_args.symbol.upper(),
+                parsed_args.expiration,
+                option_type,
+                parsed_args.strike,
+                close_quantity,
+                self.default_account,
+                parsed_args.max_wait_time,
+                parsed_args.execute
+            )
+            
+            mode = "LIVE" if parsed_args.execute else "DRY RUN"
+            action = "CLOSE" if close_quantity < 0 else "COVER"
+            option_type_display = "CALL" if option_type == 'C' else "PUT"
+            print(f"{Colors.GREEN}🚀 Started {mode} {action} {option_type_display} process: {process_id}{Colors.END}")
+            print(f"Use 'status' to monitor progress")
+        
+        except Exception as e:
+            print(f"{Colors.RED}❌ Error starting close position process: {e}{Colors.END}")
+    
     def do_status(self, args):
         """Show status of all background processes."""
         try:
@@ -526,6 +719,8 @@ Initializing...
             ("quote <symbol>", "Get real-time quote"),
             ("open_call_spread", "Open call spread with walk limit orders"),
             ("close_call_spread", "Close call spreads with walk limit orders"),
+            ("open_position", "Open single-leg option position"),
+            ("close_position", "Close single-leg option position"),
             ("status", "Show all background process status"),
             ("cancel <id|all>", "Cancel background processes and orders"),
             ("logs <process_id>", "Show process execution logs"),
@@ -538,7 +733,9 @@ Initializing...
         print(f"\n{Colors.BOLD}Examples:{Colors.END}")
         print("  open_call_spread AAPL 2024-07-19 170 2024-08-16 175 1 --execute")
         print("  close_call_spread AAPL --max_wait_time=60 --execute")
-        print("  close_call_spread AAPL  # dry-run only (no --execute)")
+        print("  open_position AAPL 2024-02-16 C 145.00 1 --execute")
+        print("  close_position AAPL 2024-02-16 C 145.00 -1 --execute")
+        print("  open_position SPY 2024-01-19 P 420.00 -2  # dry-run (no --execute)")
         print()
     
     def do_exit(self, args):

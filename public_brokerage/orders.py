@@ -6,14 +6,15 @@ from .client import PublicBrokerageClient
 from .auth import ensure_access_token
 from .models.order import (
     OrderRequest, MultiLegOrderRequest, OrderResponse,
-    Order, PreflightResponse, MultiLegPreflightResponse
+    Order, PreflightResponse, MultiLegPreflightResponse,
+    SingleLegPreflightRequest
 )
 
 
 def preflight_single_leg(
     client: PublicBrokerageClient,
     account_id: str,
-    order_request: OrderRequest
+    preflight_request: SingleLegPreflightRequest
 ) -> PreflightResponse:
     """
     Calculate estimated financial impact of a single-leg order before execution.
@@ -36,7 +37,7 @@ def preflight_single_leg(
     response = client._make_request(
         method="POST",
         endpoint=f"/userapigateway/trading/{account_id}/preflight/single-leg",
-        data=order_request.model_dump()
+        data=preflight_request.model_dump()
     )
     
     # Parse response
@@ -108,6 +109,39 @@ def place_order(
     # Parse response
     order_response = client._handle_response(response, OrderResponse)
     return order_response.orderId
+
+
+def place_single_leg_order(
+    client: PublicBrokerageClient,
+    account_id: str,
+    order_request: OrderRequest
+) -> OrderResponse:
+    """
+    Place a new single-leg order (alias for place_order with OrderResponse return).
+    
+    Args:
+        client: Authenticated client instance
+        account_id: Account ID for the order
+        order_request: Order details
+        
+    Returns:
+        OrderResponse object
+        
+    Raises:
+        requests.exceptions.RequestException: For HTTP errors
+    """
+    # Ensure we have a valid access token
+    ensure_access_token(client)
+    
+    # Make the API request
+    response = client._make_request(
+        method="POST",
+        endpoint=f"/userapigateway/trading/{account_id}/order",
+        data=order_request.model_dump()
+    )
+    
+    # Parse response and return full OrderResponse object
+    return client._handle_response(response, OrderResponse)
 
 
 def place_multileg_order(

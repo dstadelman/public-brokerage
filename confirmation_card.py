@@ -449,3 +449,303 @@ class ConfirmationCard:
         print(f"   • Consider early closure if 50% max profit reached")
         
         input("\nPress Enter to continue...")
+    
+    def display_single_leg_confirmation(
+        self,
+        symbol: str,
+        expiration: str,
+        option_type: str,
+        strike: float,
+        quantity: int,
+        strategy: str = "open",  # "open" or "close"
+        max_wait_time: int = 42,
+        account_id: Optional[str] = None,
+        execute: bool = False
+    ) -> bool:
+        """
+        Display confirmation card for single-leg option orders.
+        
+        Args:
+            symbol: Underlying symbol
+            expiration: Option expiration date (YYYY-MM-DD)
+            option_type: "C" for call, "P" for put
+            strike: Strike price
+            quantity: Number of contracts (positive=buy, negative=sell)
+            strategy: "open" for new position, "close" for closing existing
+            max_wait_time: Seconds to wait per price level
+            account_id: Account ID
+            execute: True for live execution, False for dry run
+            
+        Returns:
+            True if user confirms, False if cancelled
+        """
+        try:
+            # Determine action and position type
+            is_call = option_type.upper() in ['C', 'CALL']
+            option_type_display = "CALL" if is_call else "PUT"
+            
+            if strategy == "open":
+                action = "BUY" if quantity > 0 else "SELL"
+                action_verb = "Opening" if quantity > 0 else "Selling"
+                position_type = "LONG" if quantity > 0 else "SHORT"
+            else:  # close
+                action = "SELL" if quantity < 0 else "BUY"
+                action_verb = "Closing" if quantity < 0 else "Covering"
+                position_type = "LONG" if quantity < 0 else "SHORT"
+            
+            print("\n" + "=" * 80)
+            print(f"📋 {option_type_display} OPTION ORDER CONFIRMATION")
+            print("=" * 80)
+            
+            # Get account ID if not provided
+            if not account_id:
+                from config import config
+                account_id = config.get_default_account()
+                
+            if not account_id:
+                print(f"❌ No account ID available for quote fetch")
+                return False
+            
+            # Get underlying quote
+            underlying_quote = self._get_underlying_quote(symbol, account_id)
+            if not underlying_quote:
+                print(f"❌ Could not fetch quote for {symbol}")
+                return False
+            
+            print(f"📈 Underlying: {symbol} @ ${underlying_quote.last}")
+            if underlying_quote.bid and underlying_quote.ask:
+                print(f"📊 Bid/Ask: ${underlying_quote.bid} / ${underlying_quote.ask}")
+            if underlying_quote.volume:
+                print(f"📦 Volume: {underlying_quote.volume:,}")
+            print("-" * 80)
+            
+            # Get option data using OSI formatter
+            from utils import format_osi_symbol
+            option_symbol = format_osi_symbol(symbol, expiration, option_type, strike)
+            option_data = self._get_option_data_by_symbol(option_symbol, account_id)
+            
+            if not option_data:
+                print("❌ Could not fetch option data")
+                return False
+            
+            # Display option information
+            print(f"🎯 OPTION DETAILS:")
+            print(f"   Symbol: {option_symbol}")
+            print(f"   Type: {option_type_display}")
+            print(f"   Strike: ${strike}")
+            print(f"   Expiration: {expiration}")
+            print(f"   Action: {action} {abs(quantity)} contracts")
+            print(f"   Strategy: {action_verb} {position_type} position")
+            
+            # Display current pricing
+            print(f"\n💰 CURRENT PRICING:")
+            print(f"   Bid: ${option_data['bid']:.2f}")
+            print(f"   Ask: ${option_data['ask']:.2f}")
+            print(f"   Last: ${option_data['last']:.2f}")
+            print(f"   Mid: ${(option_data['bid'] + option_data['ask']) / 2:.2f}")
+            print(f"   Spread: ${option_data['ask'] - option_data['bid']:.2f}")
+            
+            # Calculate cost/proceeds
+            if quantity > 0:  # Buying
+                target_price = option_data['ask']
+                estimated_cost = target_price * abs(quantity) * 100  # Options are per 100 shares
+                print(f"\n💸 ESTIMATED COST:")
+                print(f"   Maximum Cost: ${estimated_cost:.2f}")
+                print(f"   Walk Limit will try to get better price starting at bid")
+            else:  # Selling
+                target_price = option_data['bid']
+                estimated_proceeds = target_price * abs(quantity) * 100
+                print(f"\n💰 ESTIMATED PROCEEDS:")
+                print(f"   Minimum Proceeds: ${estimated_proceeds:.2f}")
+                print(f"   Walk Limit will try to get better price starting at ask")
+            
+            # Display option Greeks
+            self._display_single_option_greeks(option_data, quantity, account_id)
+            
+            # Calculate moneyness and risk metrics
+            self._display_single_leg_risk_analysis(
+                float(underlying_quote.last), strike, is_call, quantity, 
+                option_data, strategy
+            )
+            
+            # Display execution details
+            print(f"\n⚙️  EXECUTION DETAILS:")
+            if execute:
+                print(f"   Mode: LIVE EXECUTION")
+                print(f"   Strategy: Walk Limit Order")
+                if quantity > 0:
+                    print(f"   Starting Price: ${option_data['bid']:.2f} (walking toward ${option_data['ask']:.2f})")
+                else:
+                    print(f"   Starting Price: ${option_data['ask']:.2f} (walking toward ${option_data['bid']:.2f})")
+                print(f"   Max Wait Time: {max_wait_time} seconds per increment")
+            else:
+                print(f"   Mode: DRY RUN (simulation only)")
+                print(f"   Strategy: Walk Limit Order")
+                print(f"   Max Wait Time: 1 second per increment (dry run)")
+            print(f"   Commission: Will be calculated in preflight")
+            
+            # Days to expiration
+            try:
+                exp_date = datetime.strptime(expiration, '%Y-%m-%d').date()
+                days_to_exp = (exp_date - datetime.now().date()).days
+                print(f"   Days to Expiration: {days_to_exp}")
+            except:
+                pass
+            
+            print("=" * 80)
+            
+            # Get user confirmation
+            while True:
+                response = input("Confirm order? (y)es / (n)o / (d)etails: ").lower().strip()
+                
+                if response in ['y', 'yes']:
+                    return True
+                elif response in ['n', 'no']:
+                    print("❌ Order cancelled by user")
+                    return False
+                elif response in ['d', 'details']:
+                    self._show_single_leg_detailed_analysis(symbol, option_data, quantity, underlying_quote.last)
+                else:
+                    print("Please enter 'y', 'n', or 'd'")
+        
+        except Exception as e:
+            logger.error(f"Error displaying single leg confirmation card: {e}")
+            print(f"❌ Error displaying confirmation: {e}")
+            return False
+    
+    def _display_single_option_greeks(self, option_data: Dict, quantity: int, account_id: str) -> None:
+        """Display Greeks for a single option position."""
+        try:
+            # Get Greeks data
+            greeks = self._get_option_greeks(option_data['symbol'], account_id)
+            
+            if greeks:
+                # Convert to float
+                delta = float(greeks.delta) if greeks.delta else 0.0
+                gamma = float(greeks.gamma) if greeks.gamma else 0.0
+                theta = float(greeks.theta) if greeks.theta else 0.0
+                vega = float(greeks.vega) if greeks.vega else 0.0
+                
+                # Apply quantity and position direction
+                position_delta = delta * quantity
+                position_gamma = gamma * quantity
+                position_theta = theta * quantity
+                position_vega = vega * quantity
+                
+                print(f"\n🔢 OPTION GREEKS (for {quantity} contracts):")
+                print(f"   Delta: {position_delta:.3f}")
+                print(f"   Gamma: {position_gamma:.3f}")
+                print(f"   Theta: {position_theta:.3f}")
+                print(f"   Vega:  {position_vega:.3f}")
+                print(f"   IV:    {option_data['impliedVolatility']:.1%}")
+        except Exception as e:
+            logger.warning(f"Could not fetch Greeks: {e}")
+    
+    def _display_single_leg_risk_analysis(
+        self, 
+        underlying_price: float, 
+        strike: float, 
+        is_call: bool, 
+        quantity: int,
+        option_data: Dict,
+        strategy: str
+    ) -> None:
+        """Display risk analysis for single-leg option position."""
+        print(f"\n📊 RISK ANALYSIS:")
+        
+        # Calculate moneyness
+        if is_call:
+            moneyness = underlying_price - strike
+            itm_status = "ITM" if moneyness > 0 else "OTM" if moneyness < 0 else "ATM"
+        else:  # put
+            moneyness = strike - underlying_price
+            itm_status = "ITM" if moneyness > 0 else "OTM" if moneyness < 0 else "ATM"
+        
+        print(f"   Moneyness: {itm_status} by ${abs(moneyness):.2f}")
+        
+        # Calculate intrinsic and time value
+        intrinsic_value = max(0, moneyness) if moneyness > 0 else 0
+        time_value = float(option_data['last']) - intrinsic_value
+        
+        print(f"   Intrinsic Value: ${intrinsic_value:.2f}")
+        print(f"   Time Value: ${time_value:.2f}")
+        
+        # Risk metrics based on position type
+        option_price = float(option_data['last'])
+        contract_value = option_price * 100  # Options control 100 shares
+        
+        if quantity > 0:  # Long position
+            max_loss = option_price * abs(quantity) * 100
+            max_profit = "Unlimited" if is_call else f"${(strike * abs(quantity) * 100) - max_loss:.2f}"
+            print(f"   Max Loss: ${max_loss:.2f} (premium paid)")
+            print(f"   Max Profit: {max_profit}")
+            
+            # Breakeven
+            if is_call:
+                breakeven = strike + option_price
+                print(f"   Breakeven: ${breakeven:.2f} (strike + premium)")
+            else:
+                breakeven = strike - option_price
+                print(f"   Breakeven: ${breakeven:.2f} (strike - premium)")
+                
+        else:  # Short position
+            max_profit = option_price * abs(quantity) * 100
+            max_loss = "Unlimited" if is_call else f"${(strike * abs(quantity) * 100) - max_profit:.2f}"
+            print(f"   Max Profit: ${max_profit:.2f} (premium received)")
+            print(f"   Max Loss: {max_loss}")
+            
+            # Breakeven
+            if is_call:
+                breakeven = strike + option_price
+                print(f"   Breakeven: ${breakeven:.2f} (strike + premium)")
+            else:
+                breakeven = strike - option_price
+                print(f"   Breakeven: ${breakeven:.2f} (strike - premium)")
+        
+        # Liquidity analysis
+        print(f"\n🔍 LIQUIDITY ANALYSIS:")
+        volume = option_data.get('volume', 0)
+        open_interest = option_data.get('openInterest', 0)
+        
+        liquidity_score = "Good" if volume > 100 and open_interest > 500 else "Limited"
+        print(f"   Volume: {volume:,}")
+        print(f"   Open Interest: {open_interest:,}")
+        print(f"   Liquidity: {liquidity_score}")
+        
+        if liquidity_score == "Limited":
+            print("   ⚠️  Limited liquidity - wider spreads expected")
+    
+    def _show_single_leg_detailed_analysis(
+        self, 
+        symbol: str, 
+        option_data: Dict, 
+        quantity: int, 
+        underlying_price: float
+    ) -> None:
+        """Show detailed analysis for single-leg option."""
+        print("\n" + "=" * 60)
+        print("📊 DETAILED SINGLE LEG ANALYSIS")
+        print("=" * 60)
+        
+        print(f"📈 Market Data:")
+        print(f"   Underlying: {symbol} @ ${underlying_price}")
+        print(f"   Option: {option_data['symbol']}")
+        print(f"   Last Trade: ${option_data['last']:.2f}")
+        print(f"   Bid/Ask: ${option_data['bid']:.2f} / ${option_data['ask']:.2f}")
+        print(f"   Volume: {option_data.get('volume', 0):,}")
+        print(f"   Open Interest: {option_data.get('openInterest', 0):,}")
+        print(f"   Implied Volatility: {option_data['impliedVolatility']:.1%}")
+        
+        print(f"\n💡 Strategy Notes:")
+        if quantity > 0:
+            print(f"   • Long option position - limited risk, unlimited upside potential")
+            print(f"   • Theta decay works against you")
+            print(f"   • Benefits from increased volatility")
+            print(f"   • Consider profit-taking at 50-100% gain")
+        else:
+            print(f"   • Short option position - limited profit, significant risk")
+            print(f"   • Theta decay works in your favor")
+            print(f"   • Harmed by increased volatility")
+            print(f"   • Consider closing at 25-50% max profit")
+        
+        input("\nPress Enter to continue...")

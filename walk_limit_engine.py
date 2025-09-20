@@ -14,10 +14,15 @@ import logging
 
 from public_brokerage.client import PublicBrokerageClient
 from public_brokerage.orders import (
-    preflight_multi_leg, place_multileg_order, get_order, cancel_order
+    preflight_multi_leg, place_multileg_order, get_order, cancel_order,
+    preflight_single_leg, place_single_leg_order
 )
 from public_brokerage.auth import ensure_access_token
-from public_brokerage.models.order import MultiLegOrderRequest, MultiLegPreflightRequest, OrderLeg, OrderType, MultiLegPreflightResponse, OrderResponse
+from public_brokerage.models.order import (
+    MultiLegOrderRequest, MultiLegPreflightRequest, OrderLeg, OrderType, 
+    MultiLegPreflightResponse, OrderResponse, OrderRequest, PreflightResponse,
+    SingleLegPreflightRequest
+)
 from public_brokerage.models.common import OrderSide, OpenCloseIndicator, InstrumentType, Instrument, Expiration, TimeInForce
 from public_brokerage.models.market_data import Quote
 from public_brokerage.auth import ensure_access_token
@@ -42,9 +47,7 @@ class WalkLimitProcess:
     """Represents a walk limit trading process."""
     process_id: str
     symbol: str
-    strategy: str  # 'open_call_spread' or 'close_call_spread'
-    short_symbol: str  # Actual option symbol
-    long_symbol: str   # Actual option symbol
+    strategy: str  # 'open_call_spread', 'close_call_spread', 'open_single_leg', 'close_single_leg'
     quantity: int
     remaining_quantity: int  # Track unfilled quantity for partial fills
     max_wait_time: int
@@ -57,6 +60,14 @@ class WalkLimitProcess:
     max_attempts: int
     created_at: datetime
     last_update: datetime
+    # For spread strategies
+    short_symbol: Optional[str] = None  # Actual option symbol for spreads
+    long_symbol: Optional[str] = None   # Actual option symbol for spreads
+    # For single leg strategies
+    option_symbol: Optional[str] = None  # Single option symbol
+    option_type: Optional[str] = None    # "C" or "P" for single legs
+    strike: Optional[float] = None       # Strike price for single legs
+    expiration: Optional[str] = None     # Expiration date for single legs
     last_order_id: Optional[str] = None
 
 
@@ -1102,3 +1113,525 @@ class WalkLimitEngine:
                 and process.last_order_id):
                 active_orders[process_id] = process.last_order_id
         return active_orders
+    
+    def start_open_single_leg_process(
+        self,
+        symbol: str,
+        expiration: str,
+        option_type: str,
+        strike: float,
+        quantity: int,
+        account_id: str,
+        max_wait_time: int = 42,
+        execute_mode: bool = False
+    ) -> str:
+        """Start walk limit process to open a single-leg option position."""
+        
+        # Construct option symbol using the same pattern as confirmation_card.py
+        from utils.option_symbols import format_osi_symbol
+        option_symbol = format_osi_symbol(symbol, expiration, option_type, strike)
+        
+        # Get current option pricing
+        option_bid, option_ask = self._get_single_option_pricing(option_symbol, account_id)
+        
+        if option_bid is None or option_ask is None:
+            raise ValueError(f"Could not determine pricing for option {option_symbol}")
+        
+        # Calculate increment size and pricing for single options
+        spread_width = option_ask - option_bid
+        if spread_width >= 0.20:
+            increment = round(spread_width / 20, 2)  # Round to penny
+        else:
+            increment = 0.01
+        
+        # Ensure minimum penny increment - always start with $0.01 for best price
+        increment = max(0.01, increment)
+        
+        max_attempts = int(spread_width / increment) + 1
+        
+        # For buying (positive quantity), start above bid and walk toward ask
+        # For selling (negative quantity), start below ask and walk toward bid
+        if quantity > 0:  # Buying
+            start_price = round(option_bid + increment, 2)
+            target_price = round(option_ask, 2)
+        else:  # Selling
+            start_price = round(option_ask - increment, 2)
+            target_price = round(option_bid, 2)
+            increment = -increment  # Walk downward for sells
+        
+        # Create process
+        process_id = str(uuid.uuid4())[:8]
+        process = WalkLimitProcess(
+            process_id=process_id,
+            symbol=symbol,
+            strategy="open_single_leg",
+            quantity=quantity,
+            remaining_quantity=abs(quantity),  # Track absolute quantity remaining
+            max_wait_time=max_wait_time,
+            execute_mode=execute_mode,
+            status=ProcessStatus.STARTING,
+            current_price=start_price,
+            target_price=target_price,
+            increment=increment,
+            attempts=0,
+            max_attempts=max_attempts,
+            created_at=datetime.now(),
+            last_update=datetime.now(),
+            # Single leg specific fields
+            option_symbol=option_symbol,
+            option_type=option_type,
+            strike=strike,
+            expiration=expiration
+        )
+        
+        self.processes[process_id] = process
+        
+        # Start background thread
+        stop_event = threading.Event()
+        self.stop_events[process_id] = stop_event
+        
+        thread = threading.Thread(
+            target=self._run_single_leg_process,
+            args=(process, stop_event, account_id),
+            daemon=True
+        )
+        self.threads[process_id] = thread
+        thread.start()
+        
+        self.logger.info(f"Started open single leg process {process_id} for {option_symbol}")
+        return process_id
+    
+    def _round_to_increment(self, price: float, increment: float) -> float:
+        """Round price to the nearest valid increment (e.g., $0.05 or $0.10 for certain options)."""
+        if increment == 0.05:
+            # Round to nearest nickel
+            return round(price * 20) / 20
+        elif increment == 0.10:
+            # Round to nearest dime
+            return round(price * 10) / 10
+        else:
+            # Round to nearest penny
+            return round(price, 2)
+    
+    def start_close_single_leg_process(
+        self,
+        symbol: str,
+        expiration: str,
+        option_type: str,
+        strike: float,
+        quantity: int,
+        account_id: str,
+        max_wait_time: int = 42,
+        execute_mode: bool = False
+    ) -> str:
+        """Start walk limit process to close a single-leg option position."""
+        
+        # First verify the position exists
+        from public_brokerage.accounts import get_account_portfolio
+        portfolio = get_account_portfolio(self.client, account_id)
+        
+        # Construct option symbol
+        from utils.option_symbols import format_osi_symbol
+        option_symbol = format_osi_symbol(symbol, expiration, option_type, strike)
+        
+        # Find the position in portfolio
+        position = None
+        for pos in portfolio.positions:
+            # Handle both enum and string types for instrument type
+            instrument_type = pos.instrument.type
+            if hasattr(instrument_type, 'value'):
+                type_value = instrument_type.value
+            else:
+                type_value = str(instrument_type)
+            
+            if type_value == "OPTION":
+                # Strip -OPTION suffix from position symbol for comparison
+                position_symbol = pos.instrument.symbol
+                if position_symbol.endswith('-OPTION'):
+                    position_symbol = position_symbol[:-7]  # Remove '-OPTION'
+                
+                if position_symbol == option_symbol:
+                    position = pos
+                    break
+        
+        if not position:
+            raise ValueError(f"No position found for option {option_symbol}")
+        
+        # Validate close quantity doesn't exceed position
+        current_quantity = float(position.quantity)
+        if abs(quantity) > abs(current_quantity):
+            raise ValueError(f"Cannot close {abs(quantity)} contracts - only {abs(current_quantity)} available")
+        
+        # Get current option pricing
+        option_bid, option_ask = self._get_single_option_pricing(option_symbol, account_id)
+        
+        if option_bid is None or option_ask is None:
+            raise ValueError(f"Could not determine pricing for option {option_symbol}")
+        
+        # Calculate increment size - always start with $0.01 for best price
+        spread_width = option_ask - option_bid
+        if spread_width >= 0.20:
+            increment = round(spread_width / 20, 2)
+        else:
+            increment = 0.01
+        
+        increment = max(0.01, increment)
+            
+        max_attempts = int(spread_width / increment) + 1
+        
+        # For closing, we want to optimize price:
+        # If closing a long position (selling), start at ASK and walk DOWN toward BID (try high first, go lower if needed)
+        # If closing a short position (buying to cover), start at BID and walk UP toward ASK (try low first, go higher if needed)
+        position_is_long = current_quantity > 0
+        
+        if (position_is_long and quantity < 0) or (not position_is_long and quantity > 0):
+            # Selling a long position or buying to cover short
+            if position_is_long:  # Selling long position - start high, walk down to get best selling price
+                start_price = round(option_ask - increment, 2)
+                target_price = round(option_bid, 2)
+                increment = -increment  # Walk downward (high to low)
+            else:  # Buying to cover short - start low, walk up to get best buying price
+                start_price = round(option_bid + increment, 2)
+                target_price = round(option_ask, 2) 
+                # increment stays positive for upward walk (low to high)
+        else:
+            raise ValueError(f"Invalid close direction: position quantity {current_quantity}, close quantity {quantity}")
+        
+        # Create process
+        process_id = str(uuid.uuid4())[:8]
+        process = WalkLimitProcess(
+            process_id=process_id,
+            symbol=symbol,
+            strategy="close_single_leg",
+            quantity=quantity,
+            remaining_quantity=abs(quantity),
+            max_wait_time=max_wait_time,
+            execute_mode=execute_mode,
+            status=ProcessStatus.STARTING,
+            current_price=start_price,
+            target_price=target_price,
+            increment=increment,
+            attempts=0,
+            max_attempts=max_attempts,
+            created_at=datetime.now(),
+            last_update=datetime.now(),
+            # Single leg specific fields
+            option_symbol=option_symbol,
+            option_type=option_type,
+            strike=strike,
+            expiration=expiration
+        )
+        
+        self.processes[process_id] = process
+        
+        # Start background thread
+        stop_event = threading.Event()
+        self.stop_events[process_id] = stop_event
+        
+        thread = threading.Thread(
+            target=self._run_single_leg_process,
+            args=(process, stop_event, account_id),
+            daemon=True
+        )
+        self.threads[process_id] = thread
+        thread.start()
+        
+        self.logger.info(f"Started close single leg process {process_id} for {option_symbol}")
+        return process_id
+    
+    def _get_single_option_pricing(self, option_symbol: str, account_id: str) -> tuple[Optional[float], Optional[float]]:
+        """Get current bid/ask pricing for a single option with fallback to option chain."""
+        try:
+            self.logger.info(f"Getting quotes for option: {option_symbol}")
+            
+            # Create instrument object
+            option_instrument = Instrument(symbol=option_symbol, type=InstrumentType.OPTION)
+            
+            # Try to get quotes
+            quotes = get_quotes(self.client, account_id, [option_instrument])
+            
+            if len(quotes) != 1:
+                self.logger.warning(f"Expected 1 quote, got {len(quotes)}")
+                # Fallback to option chain
+                chain_quote = self._get_quote_from_chain(option_symbol, account_id)
+                if chain_quote and chain_quote.bid is not None and chain_quote.ask is not None:
+                    bid = float(chain_quote.bid)
+                    ask = float(chain_quote.ask)
+                    if bid > 0 and ask > bid:
+                        self.logger.info(f"Option pricing from chain for {option_symbol}: bid=${bid:.2f}, ask=${ask:.2f}")
+                        return bid, ask
+                return None, None
+            
+            quote = quotes[0]
+            
+            # Check if we have valid bid/ask data
+            if quote.bid is None or quote.ask is None:
+                self.logger.warning(f"Missing bid/ask in quote for {option_symbol}: bid={quote.bid}, ask={quote.ask}")
+                # Fallback to option chain
+                chain_quote = self._get_quote_from_chain(option_symbol, account_id)
+                if chain_quote and chain_quote.bid is not None and chain_quote.ask is not None:
+                    bid = float(chain_quote.bid)
+                    ask = float(chain_quote.ask)
+                    if bid > 0 and ask > bid:
+                        self.logger.info(f"Option pricing from chain for {option_symbol}: bid=${bid:.2f}, ask=${ask:.2f}")
+                        return bid, ask
+                return None, None
+            
+            bid = float(quote.bid)
+            ask = float(quote.ask)
+            
+            # Validate reasonable spread
+            if bid <= 0 or ask <= 0 or ask <= bid:
+                self.logger.warning(f"Invalid bid/ask for {option_symbol}: bid={bid}, ask={ask}")
+                # Fallback to option chain
+                chain_quote = self._get_quote_from_chain(option_symbol, account_id)
+                if chain_quote and chain_quote.bid is not None and chain_quote.ask is not None:
+                    fallback_bid = float(chain_quote.bid)
+                    fallback_ask = float(chain_quote.ask)
+                    if fallback_bid > 0 and fallback_ask > fallback_bid:
+                        self.logger.info(f"Option pricing from chain for {option_symbol}: bid=${fallback_bid:.2f}, ask=${fallback_ask:.2f}")
+                        return fallback_bid, fallback_ask
+                return None, None
+            
+            self.logger.info(f"Option pricing for {option_symbol}: bid=${bid:.2f}, ask=${ask:.2f}")
+            return bid, ask
+            
+        except Exception as e:
+            self.logger.error(f"Error getting quotes for {option_symbol}: {e}")
+            # Try fallback to option chain
+            try:
+                chain_quote = self._get_quote_from_chain(option_symbol, account_id)
+                if chain_quote and chain_quote.bid is not None and chain_quote.ask is not None:
+                    bid = float(chain_quote.bid)
+                    ask = float(chain_quote.ask)
+                    if bid > 0 and ask > bid:
+                        self.logger.info(f"Option pricing from chain for {option_symbol}: bid=${bid:.2f}, ask=${ask:.2f}")
+                        return bid, ask
+            except Exception as fallback_error:
+                self.logger.error(f"Fallback to option chain also failed: {fallback_error}")
+            return None, None
+    
+    def _run_single_leg_process(self, process: WalkLimitProcess, stop_event: threading.Event, account_id: str):
+        """Run the walk limit process for single-leg options."""
+        try:
+            process.status = ProcessStatus.RUNNING
+            
+            while not stop_event.is_set() and process.attempts < process.max_attempts:
+                try:
+                    # Safety check: stop if no remaining quantity
+                    if process.remaining_quantity <= 0:
+                        self.logger.info(f"[COMPLETE] Process {process.process_id} - all contracts filled")
+                        process.status = ProcessStatus.COMPLETED
+                        return
+                    
+                    # Check if we've reached target for buying (positive increment) or selling (negative increment)
+                    if ((process.increment > 0 and process.current_price > process.target_price) or 
+                        (process.increment < 0 and process.current_price < process.target_price)):
+                        self.logger.info(f"Process {process.process_id} reached target price")
+                        break
+                    
+                    # Create and preflight order
+                    preflight_request = self._create_single_leg_preflight(process, account_id)
+                    if not preflight_request:
+                        self._emergency_stop_process(process, account_id, "Failed to create preflight request")
+                        return
+                    
+                    # Print preflight details
+                    self.logger.info(f"[PREFLIGHT] Single leg order: {process.option_symbol}, "
+                                   f"side: {'BUY' if process.quantity > 0 else 'SELL'}, "
+                                   f"quantity: {process.remaining_quantity}, "
+                                   f"limit: ${process.current_price:.2f}")
+                    
+                    # Preflight the order
+                    try:
+                        preflight_result = preflight_single_leg(self.client, account_id, preflight_request)
+                    except Exception as preflight_error:
+                        # Check if it's an increment error that we can fix
+                        error_str = str(preflight_error)
+                        
+                        # For HTTP errors, also check the response body
+                        response_body = ""
+                        if hasattr(preflight_error, 'response') and preflight_error.response is not None:
+                            try:
+                                response_body = preflight_error.response.text
+                                error_str += " " + response_body
+                            except:
+                                pass
+                        
+                        if "increment" in error_str.lower() and ("0.05" in error_str or "$0.05" in error_str):
+                            self.logger.info(f"[INCREMENT] API requires $0.05 increments, adjusting price from ${process.current_price:.2f}")
+                            # Round to nearest $0.05
+                            process.current_price = self._round_to_increment(process.current_price, 0.05)
+                            self.logger.info(f"[INCREMENT] Adjusted price to ${process.current_price:.2f}")
+                            # Update increment for future walks
+                            if process.increment > 0:
+                                process.increment = 0.05
+                            else:
+                                process.increment = -0.05
+                            continue  # Retry with adjusted price
+                        elif "increment" in error_str.lower() and ("0.10" in error_str or "$0.10" in error_str):
+                            self.logger.info(f"[INCREMENT] API requires $0.10 increments, adjusting price from ${process.current_price:.2f}")
+                            # Round to nearest $0.10
+                            process.current_price = self._round_to_increment(process.current_price, 0.10)
+                            self.logger.info(f"[INCREMENT] Adjusted price to ${process.current_price:.2f}")
+                            # Update increment for future walks
+                            if process.increment > 0:
+                                process.increment = 0.10
+                            else:
+                                process.increment = -0.10
+                            continue  # Retry with adjusted price
+                        else:
+                            self._emergency_stop_process(process, account_id, f"Preflight API error: {preflight_error}")
+                            return
+                    
+                    if preflight_result is None or hasattr(preflight_result, 'errorMessage'):
+                        error_msg = getattr(preflight_result, 'errorMessage', 'Unknown error') if preflight_result else 'API request failed'
+                        self._emergency_stop_process(process, account_id, f"Preflight failed: {error_msg}")
+                        return
+                    
+                    self.logger.info(f"Preflight successful for process {process.process_id} at ${process.current_price:.2f}")
+                    
+                    # Log preflight response details
+                    if hasattr(preflight_result, 'estimatedCommission'):
+                        self.logger.info(f"[PREFLIGHT] Commission: ${preflight_result.estimatedCommission}")
+                    if hasattr(preflight_result, 'orderValue'):
+                        self.logger.info(f"[PREFLIGHT] Order value: ${preflight_result.orderValue}")
+                    
+                    # Place order if in execute mode
+                    if process.execute_mode:
+                        order_id = self._place_single_leg_order(process, account_id, preflight_result)
+                        if not order_id:
+                            continue  # Try next price level
+                        
+                        process.last_order_id = order_id
+                        
+                        # Wait and check fill status
+                        is_complete = self._wait_for_fill_with_partial_handling(process, stop_event, account_id)
+                        
+                        if is_complete:
+                            self.logger.info(f"[COMPLETE] Process {process.process_id} fully filled")
+                            process.status = ProcessStatus.COMPLETED
+                            return
+                        
+                        # Cancel any remaining open order before walking price
+                        if process.last_order_id:
+                            try:
+                                cancel_success, filled_qty = self._cancel_order_with_verification(process, account_id)
+                                if not cancel_success:
+                                    self.logger.warning(f"[CANCEL] Order {process.last_order_id} could not be cancelled - may have filled during cancel")
+                                
+                                # Update remaining quantity based on actual fills from cancel verification
+                                if filled_qty > 0:
+                                    process.remaining_quantity -= filled_qty
+                                    self.logger.info(f"[PROGRESS] Filled {filled_qty} contracts during timeout/cancel, {process.remaining_quantity} remaining")
+                                
+                                # Check if we're now complete after getting filled quantity from cancel
+                                if process.remaining_quantity <= 0:
+                                    process.status = ProcessStatus.COMPLETED
+                                    self.logger.info(f"[COMPLETE] Process {process.process_id} fully filled during cancellation")
+                                    return
+                            except Exception as cancel_error:
+                                self._emergency_stop_process(process, account_id, f"Critical error during order cancellation: {cancel_error}")
+                                return
+                            process.last_order_id = None
+                    
+                    else:
+                        # Dry run mode - just simulate
+                        self.logger.info(f"[DRY RUN] Would place single leg order at ${process.current_price:.2f}")
+                        time.sleep(1)  # Brief pause for dry run
+                    
+                    # Walk to next price level
+                    process.current_price = round(process.current_price + process.increment, 2)
+                    process.attempts += 1
+                    process.last_update = datetime.now()
+                    
+                    # Brief pause between attempts
+                    if not stop_event.wait(1):
+                        continue
+                    
+                except Exception as e:
+                    self.logger.error(f"Error in process {process.process_id}: {e}")
+                    process.status = ProcessStatus.ERROR
+                    return
+            
+            # Process completed or reached max attempts
+            if process.remaining_quantity > 0:
+                self.logger.info(f"Process {process.process_id} completed with {process.remaining_quantity} contracts unfilled")
+            
+            if process.status != ProcessStatus.COMPLETED:
+                process.status = ProcessStatus.COMPLETED
+                
+        except Exception as e:
+            self.logger.error(f"Fatal error in process {process.process_id}: {e}")
+            # CRITICAL: Emergency cancel any open orders
+            self._emergency_stop_process(process, account_id, f"Fatal exception: {e}")
+            process.status = ProcessStatus.ERROR
+        
+        finally:
+            process.last_update = datetime.now()
+    
+    def _create_single_leg_preflight(self, process: WalkLimitProcess, account_id: str) -> Optional[SingleLegPreflightRequest]:
+        """Create preflight request for single-leg option order."""
+        try:
+            # Determine order side and open/close indicator
+            if process.strategy == "open_single_leg":
+                order_side = OrderSide.BUY if process.quantity > 0 else OrderSide.SELL
+                open_close = OpenCloseIndicator.OPEN
+            else:  # close_single_leg
+                # For closing, the order side is opposite to the original position direction
+                order_side = OrderSide.SELL if process.quantity < 0 else OrderSide.BUY
+                open_close = OpenCloseIndicator.CLOSE
+            
+            # Create the preflight request (no orderId needed)
+            preflight_request = SingleLegPreflightRequest(
+                instrument=Instrument(symbol=process.option_symbol, type=InstrumentType.OPTION),
+                orderSide=order_side,
+                orderType=OrderType.LIMIT,
+                expiration=Expiration(timeInForce=TimeInForce.DAY),
+                quantity=str(process.remaining_quantity),
+                limitPrice=str(process.current_price),
+                openCloseIndicator=open_close
+            )
+            
+            return preflight_request
+            
+        except Exception as e:
+            self.logger.error(f"Error creating single leg preflight for process {process.process_id}: {e}")
+            return None
+    
+    def _place_single_leg_order(self, process: WalkLimitProcess, account_id: str, preflight_result) -> Optional[str]:
+        """Place a single-leg option order."""
+        try:
+            # Create order request (similar to preflight but for actual order)
+            if process.strategy == "open_single_leg":
+                order_side = OrderSide.BUY if process.quantity > 0 else OrderSide.SELL
+                open_close = OpenCloseIndicator.OPEN
+            else:  # close_single_leg
+                order_side = OrderSide.SELL if process.quantity < 0 else OrderSide.BUY
+                open_close = OpenCloseIndicator.CLOSE
+            
+            order_request = OrderRequest(
+                orderId=str(uuid.uuid4()),
+                instrument=Instrument(symbol=process.option_symbol, type=InstrumentType.OPTION),
+                orderSide=order_side,
+                orderType=OrderType.LIMIT,
+                expiration=Expiration(timeInForce=TimeInForce.DAY),
+                quantity=str(process.remaining_quantity),
+                limitPrice=str(process.current_price),
+                openCloseIndicator=open_close
+            )
+            
+            # Place the order
+            order_response = place_single_leg_order(self.client, account_id, order_request)
+            
+            if order_response and hasattr(order_response, 'orderId'):
+                order_id = order_response.orderId
+                self.logger.info(f"[ORDER] Placed single leg order {order_id} at ${process.current_price:.2f}")
+                return order_id
+            else:
+                self.logger.error(f"Failed to place single leg order: {order_response}")
+                return None
+                
+        except Exception as e:
+            self.logger.error(f"Error placing single leg order for process {process.process_id}: {e}")
+            return None

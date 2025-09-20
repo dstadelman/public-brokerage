@@ -433,3 +433,162 @@ class PositionAnalyzer:
             'expiration': expiration_info,
             'is_calendar': is_calendar
         }
+    
+    def find_option_position(self, positions: List[Position], option_symbol: str) -> Optional[Position]:
+        """
+        Find a specific option position by symbol.
+        
+        Args:
+            positions: List of Position objects from portfolio
+            option_symbol: OSI-compliant option symbol to search for
+            
+        Returns:
+            Position object if found, None otherwise
+        """
+        try:
+            for position in positions:
+                if position.instrument.type == InstrumentType.OPTION:
+                    # Strip -OPTION suffix from position symbol for comparison
+                    position_symbol = position.instrument.symbol
+                    if position_symbol.endswith('-OPTION'):
+                        position_symbol = position_symbol[:-7]  # Remove '-OPTION'
+                    
+                    if position_symbol == option_symbol:
+                        return position
+            return None
+        except Exception as e:
+            self.logger.error(f"Error finding option position for {option_symbol}: {e}")
+            return None
+    
+    def validate_close_quantity(self, position: Position, close_quantity: int) -> Tuple[bool, str]:
+        """
+        Validate that a close quantity is valid for the given position.
+        
+        Args:
+            position: Position object to validate against
+            close_quantity: Number of contracts to close (signed)
+            
+        Returns:
+            Tuple of (is_valid, error_message)
+        """
+        try:
+            if not position:
+                return False, "No position found"
+            
+            current_quantity = float(position.quantity)
+            abs_close_quantity = abs(close_quantity)
+            abs_current_quantity = abs(current_quantity)
+            
+            # Check if we have enough contracts to close
+            if abs_close_quantity > abs_current_quantity:
+                return False, f"Cannot close {abs_close_quantity} contracts - only {abs_current_quantity} available"
+            
+            # Validate close direction makes sense
+            # To close a long position (current_quantity > 0), we need to sell (close_quantity < 0)
+            # To close a short position (current_quantity < 0), we need to buy (close_quantity > 0)
+            if (current_quantity > 0 and close_quantity >= 0) or (current_quantity < 0 and close_quantity <= 0):
+                return False, f"Invalid close direction: position {current_quantity}, close {close_quantity}"
+            
+            # Valid close
+            return True, f"Valid close: {abs_close_quantity} of {abs_current_quantity} contracts"
+            
+        except Exception as e:
+            self.logger.error(f"Error validating close quantity: {e}")
+            return False, f"Validation error: {e}"
+    
+    def get_single_option_positions(self, positions: List[Position]) -> List[Position]:
+        """
+        Get all single option positions (not part of spreads).
+        
+        Args:
+            positions: List of Position objects from portfolio
+            
+        Returns:
+            List of single option positions
+        """
+        try:
+            analysis = self.analyze_positions(positions)
+            
+            # Get all options that are not part of spreads
+            single_options = []
+            
+            # Start with all option positions
+            for position in positions:
+                if position.instrument.type == InstrumentType.OPTION:
+                    single_options.append(position)
+            
+            # Remove options that are part of spreads
+            spread_symbols = set()
+            
+            # Collect symbols from call spreads
+            for spread in analysis['call_spreads']:
+                spread_symbols.add(spread.short_leg.symbol)
+                spread_symbols.add(spread.long_leg.symbol)
+            
+            # Collect symbols from put spreads
+            for spread in analysis['put_spreads']:
+                spread_symbols.add(spread.short_leg.symbol)
+                spread_symbols.add(spread.long_leg.symbol)
+            
+            # Filter out spread positions
+            return [pos for pos in single_options if pos.instrument.symbol not in spread_symbols]
+            
+        except Exception as e:
+            self.logger.error(f"Error getting single option positions: {e}")
+            return []
+    
+    def get_position_summary(self, position: Position) -> Dict:
+        """
+        Get a formatted summary of a single position.
+        
+        Args:
+            position: Position object to summarize
+            
+        Returns:
+            Dictionary with position details
+        """
+        try:
+            if position.instrument.type == InstrumentType.OPTION:
+                # Parse option symbol for details
+                try:
+                    from utils.option_symbols import parse_osi_symbol
+                    parsed = parse_osi_symbol(position.instrument.symbol)
+                    
+                    return {
+                        'symbol': position.instrument.symbol,
+                        'underlying': parsed['underlying'],
+                        'option_type': parsed['option_type'],
+                        'strike': parsed['strike_price'],
+                        'expiration': parsed['expiration_date'],
+                        'quantity': float(position.quantity),
+                        'market_value': float(position.marketValue) if position.marketValue else 0.0,
+                        'unrealized_pnl': float(position.unrealizedPnl) if position.unrealizedPnl else 0.0,
+                        'position_type': 'LONG' if float(position.quantity) > 0 else 'SHORT',
+                        'instrument_type': 'OPTION'
+                    }
+                except Exception as parse_error:
+                    self.logger.warning(f"Could not parse option symbol {position.instrument.symbol}: {parse_error}")
+                    return {
+                        'symbol': position.instrument.symbol,
+                        'quantity': float(position.quantity),
+                        'market_value': float(position.marketValue) if position.marketValue else 0.0,
+                        'unrealized_pnl': float(position.unrealizedPnl) if position.unrealizedPnl else 0.0,
+                        'position_type': 'LONG' if float(position.quantity) > 0 else 'SHORT',
+                        'instrument_type': 'OPTION'
+                    }
+            else:
+                return {
+                    'symbol': position.instrument.symbol,
+                    'quantity': float(position.quantity),
+                    'market_value': float(position.marketValue) if position.marketValue else 0.0,
+                    'unrealized_pnl': float(position.unrealizedPnl) if position.unrealizedPnl else 0.0,
+                    'position_type': 'LONG' if float(position.quantity) > 0 else 'SHORT',
+                    'instrument_type': position.instrument.type.value
+                }
+                
+        except Exception as e:
+            self.logger.error(f"Error creating position summary: {e}")
+            return {
+                'symbol': getattr(position.instrument, 'symbol', 'Unknown'),
+                'error': str(e)
+            }

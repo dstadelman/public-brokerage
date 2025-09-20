@@ -64,7 +64,7 @@ class Order(BaseModel):
 
 
 class OrderRequest(BaseModel):
-    """Order request model."""
+    """Order request model (for actual order placement)."""
     orderId: str  # UUID string
     instrument: Instrument
     orderSide: OrderSide
@@ -79,6 +79,23 @@ class OrderRequest(BaseModel):
     class Config:
         """Pydantic configuration."""
         use_enum_values = True
+
+
+class SingleLegPreflightRequest(BaseModel):
+    """Single-leg preflight request model."""
+    instrument: Instrument
+    orderSide: OrderSide
+    orderType: OrderType
+    expiration: Expiration
+    quantity: str
+    limitPrice: Optional[str] = None
+    stopPrice: Optional[str] = None
+    openCloseIndicator: Optional[OpenCloseIndicator] = None
+
+    class Config:
+        """Pydantic configuration."""
+        use_enum_values = True
+        exclude_none = True
 
 
 class MultiLegPreflightRequest(BaseModel):
@@ -154,17 +171,17 @@ class PriceIncrement(BaseModel):
 class PreflightResponse(BaseModel):
     """Preflight response model."""
     instrument: Instrument
-    cusip: str
+    cusip: Optional[str] = None
     rootSymbol: str
     rootOptionSymbol: str
-    estimatedCommission: str
+    estimatedCommission: Optional[str] = None
     regulatoryFees: RegulatoryFees
-    estimatedIndexOptionFee: str
+    estimatedIndexOptionFee: Optional[str] = None
     orderValue: str
     estimatedQuantity: str
-    estimatedCost: str
-    buyingPowerRequirement: str
-    estimatedProceeds: str
+    estimatedCost: Optional[str] = None  # Can be null for certain order types
+    buyingPowerRequirement: Optional[str] = None  # Can be null for certain order types
+    estimatedProceeds: Optional[str] = None
     optionDetails: Optional[OptionDetails] = None
     estimatedOrderRebate: Optional[EstimatedOrderRebate] = None
     marginRequirement: Optional[MarginRequirement] = None

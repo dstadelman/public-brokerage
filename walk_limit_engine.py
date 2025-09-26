@@ -832,7 +832,15 @@ class WalkLimitEngine:
             except Exception as e:
                 self.logger.error(f"Error checking order status: {e}")
             
-            time.sleep(10)  # Wait 10 seconds before next API call to reduce API load
+            # Calculate remaining time and sleep for minimum of 10 seconds or remaining time
+            elapsed_time = time.time() - start_time
+            remaining_time = process.max_wait_time - elapsed_time
+            sleep_time = min(10, max(1, remaining_time))  # Sleep at least 1 second, at most 10, but don't exceed remaining time
+            
+            if sleep_time <= 1:
+                break  # Very little time left, check once more and exit
+                
+            time.sleep(sleep_time)
         
         # Timeout - check final status for any complete fill
         try:

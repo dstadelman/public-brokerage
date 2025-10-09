@@ -334,7 +334,7 @@ class PositionAnalyzer:
     ) -> Tuple[List, List[SpreadLeg]]:
         """
         Find spreads by matching quantities of short and long positions.
-        Pairs closest strikes for short and long legs.
+        Creates multiple spreads when there are quantity mismatches or multiple strikes.
         """
         spreads = []
         remaining_legs = legs.copy()
@@ -347,59 +347,65 @@ class PositionAnalyzer:
         short_legs.sort(key=lambda x: x.strike_price)
         long_legs.sort(key=lambda x: x.strike_price)
         
-        # Match short and long legs by quantity and closest strikes
-        for short_leg in short_legs.copy():
-            if short_leg not in remaining_legs:
-                continue
-                
-            # Find the best matching long leg (closest strike)
-            best_long_leg = None
-            min_strike_diff = float('inf')
+        # Keep matching until no more matches possible
+        while True:
+            matched_something = False
             
-            for long_leg in long_legs:
-                if long_leg not in remaining_legs:
+            for short_leg in short_legs.copy():
+                if short_leg not in remaining_legs or short_leg.quantity <= 0:
                     continue
+                    
+                # Find the best matching long leg (closest strike)
+                best_long_leg = None
+                min_strike_diff = float('inf')
                 
-                # Check if quantities can match (we can have partial matches)
-                min_quantity = min(short_leg.quantity, long_leg.quantity)
-                if min_quantity <= 0:
-                    continue
+                for long_leg in long_legs:
+                    if long_leg not in remaining_legs or long_leg.quantity <= 0:
+                        continue
+                    
+                    # Calculate strike difference
+                    strike_diff = abs(short_leg.strike_price - long_leg.strike_price)
+                    
+                    if strike_diff < min_strike_diff:
+                        min_strike_diff = strike_diff
+                        best_long_leg = long_leg
                 
-                # Calculate strike difference
-                strike_diff = abs(short_leg.strike_price - long_leg.strike_price)
-                
-                if strike_diff < min_strike_diff:
-                    min_strike_diff = strike_diff
-                    best_long_leg = long_leg
+                # Create spread if we found a matching pair
+                if best_long_leg and best_long_leg.quantity > 0:
+                    min_quantity = min(short_leg.quantity, best_long_leg.quantity)
+                    
+                    if min_quantity > 0:
+                        if option_type == OptionType.CALL:
+                            spread = CallSpread(
+                                underlying=short_leg.underlying,
+                                short_leg=short_leg,
+                                long_leg=best_long_leg,
+                                quantity=int(min_quantity),
+                                spread_width=abs(best_long_leg.strike_price - short_leg.strike_price),
+                                net_quantity=0.0,  # TODO: Calculate based on entry prices
+                                is_debit_spread=best_long_leg.strike_price > short_leg.strike_price
+                            )
+                            spreads.append(spread)
+                        
+                        # Reduce quantities (or remove if fully matched)
+                        short_leg.quantity -= min_quantity
+                        best_long_leg.quantity -= min_quantity
+                        
+                        # Remove legs with zero quantity
+                        if short_leg.quantity <= 0:
+                            remaining_legs.remove(short_leg)
+                            short_legs.remove(short_leg)
+                        
+                        if best_long_leg.quantity <= 0:
+                            remaining_legs.remove(best_long_leg)
+                            long_legs.remove(best_long_leg)
+                        
+                        matched_something = True
+                        break  # Start over to find next best match
             
-            # Create spread if we found a matching pair
-            if best_long_leg:
-                min_quantity = min(short_leg.quantity, best_long_leg.quantity)
-                
-                if option_type == OptionType.CALL:
-                    spread = CallSpread(
-                        underlying=short_leg.underlying,
-                        short_leg=short_leg,
-                        long_leg=best_long_leg,
-                        quantity=int(min_quantity),
-                        spread_width=abs(best_long_leg.strike_price - short_leg.strike_price),
-                        net_quantity=0.0,  # TODO: Calculate based on entry prices
-                        is_debit_spread=best_long_leg.strike_price > short_leg.strike_price
-                    )
-                    spreads.append(spread)
-                
-                # Remove matched legs (or reduce quantities if partial match)
-                if short_leg.quantity == min_quantity:
-                    remaining_legs.remove(short_leg)
-                    short_legs.remove(short_leg)
-                else:
-                    short_leg.quantity -= min_quantity
-                
-                if best_long_leg.quantity == min_quantity:
-                    remaining_legs.remove(best_long_leg)
-                    long_legs.remove(best_long_leg)
-                else:
-                    best_long_leg.quantity -= min_quantity
+            # If no matches were made this iteration, we're done
+            if not matched_something:
+                break
         
         return spreads, remaining_legs
     

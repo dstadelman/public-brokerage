@@ -913,7 +913,7 @@ class WalkLimitEngine:
             cancel_order(self.client, account_id, process.last_order_id)
             
             # Verify cancellation with retries
-            max_cancel_checks = 10  # Up to 10 seconds
+            max_cancel_checks = 10  # Up to 60 seconds
             for attempt in range(max_cancel_checks):
                 try:
                     order_status = get_order(self.client, account_id, process.last_order_id)
@@ -931,11 +931,11 @@ class WalkLimitEngine:
                     
                     # Still pending cancellation
                     self.logger.debug(f"[CANCEL] Attempt {attempt + 1}: Order {process.last_order_id} status: {order_status.status}")
-                    time.sleep(1)
+                    time.sleep(6)
                     
                 except Exception as e:
                     self.logger.error(f"Error checking cancel status (attempt {attempt + 1}): {e}")
-                    time.sleep(1)
+                    time.sleep(6)
             
             # If we get here, cancel verification timed out - CRITICAL ERROR
             try:

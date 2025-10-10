@@ -14,6 +14,12 @@ from urllib3.util.retry import Retry
 
 from .models.auth import AccessTokenResponse
 
+# Import API queue for throttling - REQUIRED (no fallback)
+import sys
+import os
+sys.path.append(os.path.dirname(os.path.dirname(__file__)))
+from api_queue import queue_api_call
+
 
 class PublicBrokerageClient:
     """Base client for Public Brokerage API interactions."""
@@ -146,6 +152,25 @@ class PublicBrokerageClient:
             
         Raises:
             requests.exceptions.RequestException: For HTTP errors
+        """
+        # Route through API queue (mandatory) with HTTP method for smart throttling
+        return queue_api_call(
+            self._make_request_internal,
+            method, endpoint, data, params, include_auth, base_url_override,
+            http_method=method
+        )
+
+    def _make_request_internal(
+        self,
+        method: str,
+        endpoint: str,
+        data: Optional[Dict[str, Any]] = None,
+        params: Optional[Dict[str, Any]] = None,
+        include_auth: bool = True,
+        base_url_override: Optional[str] = None
+    ) -> requests.Response:
+        """
+        Internal method to make HTTP requests (called through API queue).
         """
         base_url = base_url_override or self.base_url
         url = urljoin(base_url + "/", endpoint.lstrip("/"))

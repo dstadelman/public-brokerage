@@ -413,6 +413,34 @@ class WalkLimitEngine:
                             process.last_order_id = order_id
                             self.logger.info(f"[ORDER] Placed order {order_id} for {process.remaining_quantity} contracts at ${process.current_price:.2f}")
                             
+                            # CRITICAL: Verify order was accepted by the system
+                            # Wait 1 second before first verification check
+                            time.sleep(1)
+                            
+                            # Verify order exists with retry logic (up to 10 seconds)
+                            order_verified = False
+                            max_verify_attempts = 10
+                            for verify_attempt in range(max_verify_attempts):
+                                try:
+                                    order_status = get_order(self.client, account_id, order_id)
+                                    if order_status and order_status.status:
+                                        self.logger.info(f"[VERIFY] Order {order_id} verified - status: {order_status.status}")
+                                        order_verified = True
+                                        break
+                                    else:
+                                        self.logger.debug(f"[VERIFY] Attempt {verify_attempt + 1}/{max_verify_attempts}: Order {order_id} not yet in system")
+                                except Exception as verify_error:
+                                    self.logger.debug(f"[VERIFY] Attempt {verify_attempt + 1}/{max_verify_attempts}: Error verifying order {order_id}: {verify_error}")
+                                
+                                # Wait 1 second between verification attempts
+                                if verify_attempt < max_verify_attempts - 1:
+                                    time.sleep(1)
+                            
+                            # CRITICAL: If order never verified, this is a fatal error
+                            if not order_verified:
+                                self._emergency_stop_process(process, account_id, f"CRITICAL: Order {order_id} could not be verified after {max_verify_attempts} seconds - order may not exist in system")
+                                return
+                            
                             # Wait for fill or timeout with partial fill handling
                             try:
                                 is_complete = self._wait_for_fill_with_partial_handling(process, stop_event, account_id)
@@ -585,6 +613,34 @@ class WalkLimitEngine:
                         if order_id:  # If we got an order ID, the order was successful
                             process.last_order_id = order_id
                             self.logger.info(f"[ORDER] Placed order {order_id} for {process.remaining_quantity} contracts at ${process.current_price:.2f}")
+                            
+                            # CRITICAL: Verify order was accepted by the system
+                            # Wait 1 second before first verification check
+                            time.sleep(1)
+                            
+                            # Verify order exists with retry logic (up to 10 seconds)
+                            order_verified = False
+                            max_verify_attempts = 10
+                            for verify_attempt in range(max_verify_attempts):
+                                try:
+                                    order_status = get_order(self.client, account_id, order_id)
+                                    if order_status and order_status.status:
+                                        self.logger.info(f"[VERIFY] Order {order_id} verified - status: {order_status.status}")
+                                        order_verified = True
+                                        break
+                                    else:
+                                        self.logger.debug(f"[VERIFY] Attempt {verify_attempt + 1}/{max_verify_attempts}: Order {order_id} not yet in system")
+                                except Exception as verify_error:
+                                    self.logger.debug(f"[VERIFY] Attempt {verify_attempt + 1}/{max_verify_attempts}: Error verifying order {order_id}: {verify_error}")
+                                
+                                # Wait 1 second between verification attempts
+                                if verify_attempt < max_verify_attempts - 1:
+                                    time.sleep(1)
+                            
+                            # CRITICAL: If order never verified, this is a fatal error
+                            if not order_verified:
+                                self._emergency_stop_process(process, account_id, f"CRITICAL: Order {order_id} could not be verified after {max_verify_attempts} seconds - order may not exist in system")
+                                return
                             
                             # Wait for fill or timeout with partial fill handling
                             try:
@@ -911,6 +967,8 @@ class WalkLimitEngine:
             # Send cancel request
             self.logger.info(f"[CANCEL] Cancelling order {process.last_order_id}")
             cancel_order(self.client, account_id, process.last_order_id)
+
+            time.sleep(1)
             
             # Verify cancellation with retries
             max_cancel_checks = 10  # Up to 60 seconds
@@ -1635,6 +1693,35 @@ class WalkLimitEngine:
             if order_response and hasattr(order_response, 'orderId'):
                 order_id = order_response.orderId
                 self.logger.info(f"[ORDER] Placed single leg order {order_id} at ${process.current_price:.2f}")
+                
+                # CRITICAL: Verify order was accepted by the system
+                # Wait 1 second before first verification check
+                time.sleep(1)
+                
+                # Verify order exists with retry logic (up to 10 seconds)
+                order_verified = False
+                max_verify_attempts = 10
+                for verify_attempt in range(max_verify_attempts):
+                    try:
+                        order_status = get_order(self.client, account_id, order_id)
+                        if order_status and order_status.status:
+                            self.logger.info(f"[VERIFY] Order {order_id} verified - status: {order_status.status}")
+                            order_verified = True
+                            break
+                        else:
+                            self.logger.debug(f"[VERIFY] Attempt {verify_attempt + 1}/{max_verify_attempts}: Order {order_id} not yet in system")
+                    except Exception as verify_error:
+                        self.logger.debug(f"[VERIFY] Attempt {verify_attempt + 1}/{max_verify_attempts}: Error verifying order {order_id}: {verify_error}")
+                    
+                    # Wait 1 second between verification attempts
+                    if verify_attempt < max_verify_attempts - 1:
+                        time.sleep(1)
+                
+                # CRITICAL: If order never verified, this is a fatal error
+                if not order_verified:
+                    self.logger.error(f"CRITICAL: Order {order_id} could not be verified after {max_verify_attempts} seconds - order may not exist in system")
+                    return None
+                
                 return order_id
             else:
                 self.logger.error(f"Failed to place single leg order: {order_response}")

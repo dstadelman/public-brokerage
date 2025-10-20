@@ -55,7 +55,7 @@ class Position(BaseModel):
     currentValue: str
     percentOfPortfolio: str
     lastPrice: LastPrice
-    instrumentGain: Gain
+    instrumentGain: Optional[Gain] = None  # Can be null for some positions
     positionDailyGain: Optional[Gain] = None  # Can be null for some positions
     costBasis: CostBasis
 

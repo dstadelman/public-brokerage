@@ -279,3 +279,5 @@ config.ini
 config.yaml
 config.json
 settings.json
+
+#ORDERS*.md

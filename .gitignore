@@ -280,4 +280,4 @@ config.yaml
 config.json
 settings.json
 
-#ORDERS*.md
+ORDERS.md

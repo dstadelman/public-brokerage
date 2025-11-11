@@ -1,3 +1,15 @@
+# WARNING
+
+This code is **vibe-coded slop**. It may be useful if you're trying to implement your own API calls to Public.
+
+Some problems I encountered with this code:
+
+* The AI made some really dangerous decisions on how it was canceling orders—potentially increasing the size of trades way higher than intended. I *think* I fixed this, but I can't be sure there aren't more problems.
+* The Public API seems to have some issues with concurrency. This code attempts to solve this problem by only sending one *account state modification* API call at a time.
+    * I was simply blasting APIs, and an order got *stuck* such that I could not close it. The order went away at the end of the day (as it was supposed to), but the Public support folks could not cancel the order for me and have not given me a reason why it happened.
+
+This is a personal project—and not meant to be used by general folks or to solve problems in general for all uses. Unfortunately I don't have time to maintain this code for everyone. Feel free to fork this project.
+
 # Public Brokerage Trading Shell
 
 A comprehensive Python trading system with an interactive shell interface for the Public Brokerage API. Features walk limit orders, sophisticated spread trading, and advanced position management.
@@ -366,3 +378,4 @@ MIT License - see LICENSE file for details.
 - Documentation: [Public API Docs](https://public.com/api/docs)
 - Issues: [GitHub Issues](https://github.com/yourusername/public-brokerage/issues)
 - Email: [API Support](mailto:api-concierge@public.com)
+

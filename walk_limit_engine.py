@@ -47,7 +47,7 @@ class WalkLimitProcess:
     """Represents a walk limit trading process."""
     process_id: str
     symbol: str
-    strategy: str  # 'open_call_spread', 'close_call_spread', 'open_single_leg', 'close_single_leg'
+    strategy: str  # 'open_call_spread', 'close_call_spread', 'open_single_leg', 'close_single_leg', 'open_ff', 'close_ff'
     quantity: int
     remaining_quantity: int  # Track unfilled quantity for partial fills
     max_wait_time: int
@@ -69,6 +69,11 @@ class WalkLimitProcess:
     strike: Optional[float] = None       # Strike price for single legs
     expiration: Optional[str] = None     # Expiration date for single legs
     last_order_id: Optional[str] = None
+    # For forward factor strategies
+    is_ff_strategy: bool = False         # True for open_ff/close_ff strategies
+    ff_threshold: Optional[float] = None # Target FF threshold (min_ff or max_ff)
+    ff_target_price: Optional[float] = None  # Solved spread price at target FF
+    initial_ff: Optional[float] = None   # FF at start (for logging)
 
 
 class WalkLimitEngine:
@@ -1404,6 +1409,338 @@ class WalkLimitEngine:
         
         self.logger.info(f"Started close single leg process {process_id} for {option_symbol}")
         return process_id
+    
+    def start_open_ff_process(
+        self,
+        symbol: str,
+        short_exp: str,
+        long_exp: str,
+        strike: float,
+        quantity: int,
+        account_id: str,
+        min_ff: float = 0.2,
+        max_wait_time: int = 42,
+        execute_mode: bool = False,
+        analyzer=None  # ForwardFactorAnalyzer instance
+    ) -> Optional[str]:
+        """
+        Start walk limit process to open calendar spread at min forward factor.
+        
+        Algorithm:
+        1. Solve for max_acceptable_price where FF = min_ff (highest we'll pay)
+        2. Get current BID (we're buying)
+        3. If max_acceptable_price >= BID: Walk from BID UP to max_acceptable_price
+        4. Else: Return None (not feasible - market too expensive)
+        
+        Args:
+            symbol: Underlying symbol
+            short_exp: Short leg expiration (YYYY-MM-DD)
+            long_exp: Long leg expiration (YYYY-MM-DD)
+            strike: Strike price for both legs
+            quantity: Number of spreads
+            account_id: Account ID
+            min_ff: Minimum forward factor threshold (default 0.2)
+            max_wait_time: Maximum wait time in seconds
+            execute_mode: Whether to execute actual orders
+            analyzer: ForwardFactorAnalyzer instance (required)
+            
+        Returns:
+            Process ID if feasible, None if not feasible
+        """
+        if analyzer is None:
+            self.logger.error("ForwardFactorAnalyzer required for FF process")
+            return None
+        
+        try:
+            # Get option chains and underlying price
+            from public_brokerage.market_data import MarketDataAPI
+            market_data = MarketDataAPI(self.client)
+            
+            short_chain = market_data.get_option_chain(symbol, short_exp)
+            long_chain = market_data.get_option_chain(symbol, long_exp)
+            quote = market_data.get_quote(symbol)
+            underlying_price = quote['last']
+            
+            # Find specific options in chains
+            short_option = analyzer._find_option_in_chain(short_chain, strike)
+            long_option = analyzer._find_option_in_chain(long_chain, strike)
+            
+            if not short_option or not long_option:
+                self.logger.error(f"Could not find strike {strike} in option chains")
+                return None
+            
+            # Get current spread pricing
+            spread_bid = long_option['bid'] - short_option['ask']
+            spread_ask = long_option['ask'] - short_option['bid']
+            spread_mid = (spread_bid + spread_ask) / 2
+            
+            # Calculate current FF at MID price for logging
+            initial_ff = analyzer.calculate_ff_at_spread_price(
+                spread_price=spread_mid,
+                underlying_price=underlying_price,
+                short_exp=short_exp,
+                long_exp=long_exp,
+                strike=strike,
+                option_chain_short=short_chain,
+                option_chain_long=long_chain
+            )
+            
+            self.logger.info(f"Current spread MID: ${spread_mid:.2f}, Current FF: {initial_ff:.3f if initial_ff else 'N/A'}")
+            
+            # Solve for max acceptable price where FF = min_ff
+            max_acceptable_price = analyzer.solve_for_spread_price_at_ff(
+                target_ff=min_ff,
+                underlying_price=underlying_price,
+                short_exp=short_exp,
+                long_exp=long_exp,
+                strike=strike,
+                option_chain_short=short_chain,
+                option_chain_long=long_chain,
+                current_spread_mid=spread_mid
+            )
+            
+            if max_acceptable_price is None:
+                self.logger.error(f"Failed to solve for spread price at FF={min_ff}")
+                return None
+            
+            self.logger.info(f"Solved max acceptable price: ${max_acceptable_price:.2f} (FF={min_ff})")
+            
+            # Feasibility check: max_acceptable_price must be >= BID
+            if max_acceptable_price < spread_bid:
+                self.logger.warning(f"NOT FEASIBLE: Max acceptable price ${max_acceptable_price:.2f} < BID ${spread_bid:.2f}")
+                return None
+            
+            # Feasible! Set up walk from BID UP to max_acceptable_price
+            start_price = round(spread_bid, 2)
+            target_price = round(max_acceptable_price, 2)
+            
+            # Calculate increment
+            spread_width = spread_ask - spread_bid
+            if spread_width >= 0.20:
+                increment = round(spread_width / 20, 2)
+            else:
+                increment = 0.01
+            increment = max(0.01, increment)
+            
+            max_attempts = int((target_price - start_price) / increment) + 1
+            
+            # Construct option symbols
+            short_symbol = self._construct_option_symbol(symbol, short_exp, strike)
+            long_symbol = self._construct_option_symbol(symbol, long_exp, strike)
+            
+            # Create process
+            process_id = str(uuid.uuid4())[:8]
+            process = WalkLimitProcess(
+                process_id=process_id,
+                symbol=symbol,
+                strategy="open_ff",
+                short_symbol=short_symbol,
+                long_symbol=long_symbol,
+                quantity=quantity,
+                remaining_quantity=quantity,
+                max_wait_time=max_wait_time,
+                execute_mode=execute_mode,
+                status=ProcessStatus.STARTING,
+                current_price=start_price,
+                target_price=target_price,
+                increment=increment,
+                attempts=0,
+                max_attempts=max_attempts,
+                created_at=datetime.now(),
+                last_update=datetime.now(),
+                # FF specific fields
+                is_ff_strategy=True,
+                ff_threshold=min_ff,
+                ff_target_price=max_acceptable_price,
+                initial_ff=initial_ff
+            )
+            
+            self.processes[process_id] = process
+            
+            # Start background thread (reuse existing spread process runner)
+            stop_event = threading.Event()
+            self.stop_events[process_id] = stop_event
+            
+            thread = threading.Thread(
+                target=self._run_open_spread_process,
+                args=(process, stop_event, account_id),
+                daemon=True
+            )
+            self.threads[process_id] = thread
+            thread.start()
+            
+            self.logger.info(f"Started open FF process {process_id}: BID ${start_price:.2f} → ${target_price:.2f} (min_ff={min_ff})")
+            return process_id
+            
+        except Exception as e:
+            self.logger.error(f"Error starting open FF process: {e}", exc_info=True)
+            return None
+    
+    def start_close_ff_process(
+        self,
+        symbol: str,
+        short_exp: str,
+        long_exp: str,
+        strike: float,
+        quantity: int,
+        account_id: str,
+        max_ff: float = 0.0,
+        max_wait_time: int = 42,
+        execute_mode: bool = False,
+        analyzer=None  # ForwardFactorAnalyzer instance
+    ) -> Optional[str]:
+        """
+        Start walk limit process to close calendar spread at max forward factor.
+        
+        Algorithm:
+        1. Solve for min_acceptable_price where FF = max_ff (lowest we'll accept)
+        2. Get current ASK (we're selling)
+        3. If min_acceptable_price <= ASK: Walk from ASK DOWN to min_acceptable_price
+        4. Else: Return None (not feasible - market too cheap)
+        
+        Args:
+            symbol: Underlying symbol
+            short_exp: Short leg expiration (YYYY-MM-DD)
+            long_exp: Long leg expiration (YYYY-MM-DD)
+            strike: Strike price for both legs
+            quantity: Number of spreads
+            account_id: Account ID
+            max_ff: Maximum forward factor threshold (default 0.0)
+            max_wait_time: Maximum wait time in seconds
+            execute_mode: Whether to execute actual orders
+            analyzer: ForwardFactorAnalyzer instance (required)
+            
+        Returns:
+            Process ID if feasible, None if not feasible
+        """
+        if analyzer is None:
+            self.logger.error("ForwardFactorAnalyzer required for FF process")
+            return None
+        
+        try:
+            # Get option chains and underlying price
+            from public_brokerage.market_data import MarketDataAPI
+            market_data = MarketDataAPI(self.client)
+            
+            short_chain = market_data.get_option_chain(symbol, short_exp)
+            long_chain = market_data.get_option_chain(symbol, long_exp)
+            quote = market_data.get_quote(symbol)
+            underlying_price = quote['last']
+            
+            # Find specific options in chains
+            short_option = analyzer._find_option_in_chain(short_chain, strike)
+            long_option = analyzer._find_option_in_chain(long_chain, strike)
+            
+            if not short_option or not long_option:
+                self.logger.error(f"Could not find strike {strike} in option chains")
+                return None
+            
+            # Get current spread pricing
+            spread_bid = long_option['bid'] - short_option['ask']
+            spread_ask = long_option['ask'] - short_option['bid']
+            spread_mid = (spread_bid + spread_ask) / 2
+            
+            # Calculate current FF at MID price for logging
+            initial_ff = analyzer.calculate_ff_at_spread_price(
+                spread_price=spread_mid,
+                underlying_price=underlying_price,
+                short_exp=short_exp,
+                long_exp=long_exp,
+                strike=strike,
+                option_chain_short=short_chain,
+                option_chain_long=long_chain
+            )
+            
+            self.logger.info(f"Current spread MID: ${spread_mid:.2f}, Current FF: {initial_ff:.3f if initial_ff else 'N/A'}")
+            
+            # Solve for min acceptable price where FF = max_ff
+            min_acceptable_price = analyzer.solve_for_spread_price_at_ff(
+                target_ff=max_ff,
+                underlying_price=underlying_price,
+                short_exp=short_exp,
+                long_exp=long_exp,
+                strike=strike,
+                option_chain_short=short_chain,
+                option_chain_long=long_chain,
+                current_spread_mid=spread_mid
+            )
+            
+            if min_acceptable_price is None:
+                self.logger.error(f"Failed to solve for spread price at FF={max_ff}")
+                return None
+            
+            self.logger.info(f"Solved min acceptable price: ${min_acceptable_price:.2f} (FF={max_ff})")
+            
+            # Feasibility check: min_acceptable_price must be <= ASK
+            if min_acceptable_price > spread_ask:
+                self.logger.warning(f"NOT FEASIBLE: Min acceptable price ${min_acceptable_price:.2f} > ASK ${spread_ask:.2f}")
+                return None
+            
+            # Feasible! Set up walk from ASK DOWN to min_acceptable_price
+            start_price = round(spread_ask, 2)
+            target_price = round(min_acceptable_price, 2)
+            
+            # Calculate increment (negative for walking down)
+            spread_width = spread_ask - spread_bid
+            if spread_width >= 0.20:
+                increment = -round(spread_width / 20, 2)
+            else:
+                increment = -0.01
+            increment = min(-0.01, increment)  # Ensure at least penny decrement
+            
+            max_attempts = int((start_price - target_price) / abs(increment)) + 1
+            
+            # Construct option symbols
+            short_symbol = self._construct_option_symbol(symbol, short_exp, strike)
+            long_symbol = self._construct_option_symbol(symbol, long_exp, strike)
+            
+            # Create process
+            process_id = str(uuid.uuid4())[:8]
+            process = WalkLimitProcess(
+                process_id=process_id,
+                symbol=symbol,
+                strategy="close_ff",
+                short_symbol=short_symbol,
+                long_symbol=long_symbol,
+                quantity=quantity,
+                remaining_quantity=quantity,
+                max_wait_time=max_wait_time,
+                execute_mode=execute_mode,
+                status=ProcessStatus.STARTING,
+                current_price=start_price,
+                target_price=target_price,
+                increment=increment,
+                attempts=0,
+                max_attempts=max_attempts,
+                created_at=datetime.now(),
+                last_update=datetime.now(),
+                # FF specific fields
+                is_ff_strategy=True,
+                ff_threshold=max_ff,
+                ff_target_price=min_acceptable_price,
+                initial_ff=initial_ff
+            )
+            
+            self.processes[process_id] = process
+            
+            # Start background thread (reuse existing spread process runner)
+            stop_event = threading.Event()
+            self.stop_events[process_id] = stop_event
+            
+            thread = threading.Thread(
+                target=self._run_close_spread_process,
+                args=(process, stop_event, account_id),
+                daemon=True
+            )
+            self.threads[process_id] = thread
+            thread.start()
+            
+            self.logger.info(f"Started close FF process {process_id}: ASK ${start_price:.2f} → ${target_price:.2f} (max_ff={max_ff})")
+            return process_id
+            
+        except Exception as e:
+            self.logger.error(f"Error starting close FF process: {e}", exc_info=True)
+            return None
     
     def _get_single_option_pricing(self, option_symbol: str, account_id: str) -> tuple[Optional[float], Optional[float]]:
         """Get current bid/ask pricing for a single option with fallback to option chain."""

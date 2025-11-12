@@ -65,7 +65,11 @@ class Config:
             'command_history_size': 1000,
             'background_processes': {},
             'last_updated': datetime.now().isoformat(),
-            'version': '1.0.0'
+            'version': '1.0.0',
+            # Forward Factor settings
+            'ff_min_threshold_default': 0.2,
+            'ff_max_threshold_default': 0.0,
+            'ff_risk_free_rate': 0.045,
         }
     
     def get(self, key: str, default: Any = None) -> Any:
@@ -118,6 +122,18 @@ class Config:
     def clear_background_processes(self) -> None:
         """Clear all background processes."""
         self.set('background_processes', {})
+    
+    def get_ff_min_threshold_default(self) -> float:
+        """Get default minimum forward factor threshold for opening."""
+        return self.get('ff_min_threshold_default', 0.2)
+    
+    def get_ff_max_threshold_default(self) -> float:
+        """Get default maximum forward factor threshold for closing."""
+        return self.get('ff_max_threshold_default', 0.0)
+    
+    def get_ff_risk_free_rate(self) -> float:
+        """Get risk-free rate for forward factor calculations."""
+        return self.get('ff_risk_free_rate', 0.045)
 
 
 # Global config instance

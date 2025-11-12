@@ -621,6 +621,391 @@ Initializing...
         except Exception as e:
             print(f"{Colors.RED}❌ Error starting close position process: {e}{Colors.END}")
     
+    def do_open_ff(self, args):
+        """Open calendar spread at minimum forward factor threshold."""
+        parser = argparse.ArgumentParser(prog='open_ff', add_help=False)
+        parser.add_argument('symbol', help='Underlying symbol (e.g., SPY)')
+        parser.add_argument('short_expiration', help='Short leg expiration (YYYY-MM-DD)')
+        parser.add_argument('long_expiration', help='Long leg expiration (YYYY-MM-DD)')
+        parser.add_argument('strike', type=float, help='Strike price for both legs')
+        parser.add_argument('quantity', type=int, help='Number of spreads')
+        parser.add_argument('--min_ff', type=float, help='Minimum forward factor (default from config)')
+        parser.add_argument('--max_wait_time', type=int, default=42, help='Max wait time per price level (seconds)')
+        parser.add_argument('--execute', action='store_true', help='Execute actual orders (default: dry run)')
+        
+        try:
+            parsed_args = parser.parse_args(shlex.split(args))
+        except SystemExit:
+            print("Usage: open_ff <symbol> <short_exp> <long_exp> <strike> <qty> [--min_ff=X] [--max_wait_time=42] [--execute]")
+            print("Example: open_ff SPY 2024-02-16 2024-03-15 500.00 1 --min_ff=0.2 --execute")
+            return
+        
+        if not self.default_account:
+            print(f"{Colors.RED}❌ No default account set. Use 'set default account <id>' first.{Colors.END}")
+            return
+        
+        try:
+            # Import ForwardFactorAnalyzer
+            from forward_factor_analyzer import ForwardFactorAnalyzer
+            analyzer = ForwardFactorAnalyzer(self.client, self.default_account)
+            
+            # Get min_ff from args or config
+            min_ff = parsed_args.min_ff if parsed_args.min_ff is not None else config.get_ff_min_threshold_default()
+            
+            # Show FF confirmation using the new display function
+            confirmed = self.confirmation_card.display_ff_confirmation(
+                parsed_args.symbol.upper(),
+                parsed_args.short_expiration,
+                parsed_args.long_expiration,
+                parsed_args.strike,
+                parsed_args.quantity,
+                min_ff,
+                is_opening=True,
+                max_wait_time=parsed_args.max_wait_time,
+                account_id=self.default_account,
+                execute=parsed_args.execute,
+                analyzer=analyzer
+            )
+            
+            if not confirmed:
+                return
+            
+            # Start walk limit process
+            process_id = self.walk_engine.start_open_ff_process(
+                parsed_args.symbol.upper(),
+                parsed_args.short_expiration,
+                parsed_args.long_expiration,
+                parsed_args.strike,
+                parsed_args.quantity,
+                self.default_account,
+                min_ff,
+                parsed_args.max_wait_time,
+                parsed_args.execute,
+                analyzer
+            )
+            
+            if process_id:
+                mode = "LIVE" if parsed_args.execute else "DRY RUN"
+                print(f"{Colors.GREEN}🚀 Started {mode} FF calendar spread process: {process_id}{Colors.END}")
+                print(f"Use 'status' to monitor progress")
+            else:
+                print(f"{Colors.RED}❌ Failed to start FF process (not feasible or error){Colors.END}")
+        
+        except Exception as e:
+            print(f"{Colors.RED}❌ Error starting FF open process: {e}{Colors.END}")
+            import traceback
+            traceback.print_exc()
+    
+    def do_close_ff(self, args):
+        """Close calendar spread at maximum forward factor threshold."""
+        parser = argparse.ArgumentParser(prog='close_ff', add_help=False)
+        parser.add_argument('symbol', help='Underlying symbol (e.g., SPY)')
+        parser.add_argument('--max_ff', type=float, help='Maximum forward factor (default from config)')
+        parser.add_argument('--max_wait_time', type=int, default=42, help='Max wait time per price level (seconds)')
+        parser.add_argument('--execute', action='store_true', help='Execute actual orders (default: dry run)')
+        
+        try:
+            parsed_args = parser.parse_args(shlex.split(args))
+        except SystemExit:
+            print("Usage: close_ff <symbol> [--max_ff=X] [--max_wait_time=42] [--execute]")
+            print("Example: close_ff SPY --max_ff=0.0 --execute")
+            return
+        
+        if not self.default_account:
+            print(f"{Colors.RED}❌ No default account set. Use 'set default account <id>' first.{Colors.END}")
+            return
+        
+        try:
+            # Import ForwardFactorAnalyzer
+            from forward_factor_analyzer import ForwardFactorAnalyzer
+            analyzer = ForwardFactorAnalyzer(self.client, self.default_account)
+            
+            # Get max_ff from args or config
+            max_ff = parsed_args.max_ff if parsed_args.max_ff is not None else config.get_ff_max_threshold_default()
+            
+            # Get current positions and find calendar spreads
+            from public_brokerage.accounts import get_account_portfolio
+            portfolio = get_account_portfolio(self.client, self.default_account)
+            
+            # For now, prompt user for details since position parsing is complex
+            print(f"\n{Colors.YELLOW}📋 Close FF Calendar Spread for {parsed_args.symbol.upper()}{Colors.END}")
+            print(f"Note: Specify the spread details")
+            
+            short_exp = input("Short expiration (YYYY-MM-DD): ").strip()
+            long_exp = input("Long expiration (YYYY-MM-DD): ").strip()
+            strike = float(input("Strike price: ").strip())
+            quantity = int(input("Quantity to close: ").strip())
+            
+            # Show FF confirmation using the new display function
+            confirmed = self.confirmation_card.display_ff_confirmation(
+                parsed_args.symbol.upper(),
+                short_exp,
+                long_exp,
+                strike,
+                quantity,
+                max_ff,
+                is_opening=False,
+                max_wait_time=parsed_args.max_wait_time,
+                account_id=self.default_account,
+                execute=parsed_args.execute,
+                analyzer=analyzer
+            )
+            
+            if not confirmed:
+                return
+            
+            # Start walk limit process
+            process_id = self.walk_engine.start_close_ff_process(
+                parsed_args.symbol.upper(),
+                short_exp,
+                long_exp,
+                strike,
+                quantity,
+                self.default_account,
+                max_ff,
+                parsed_args.max_wait_time,
+                parsed_args.execute,
+                analyzer
+            )
+            
+            if process_id:
+                mode = "LIVE" if parsed_args.execute else "DRY RUN"
+                print(f"{Colors.GREEN}🚀 Started {mode} FF close process: {process_id}{Colors.END}")
+                print(f"Use 'status' to monitor progress")
+            else:
+                print(f"{Colors.RED}❌ Failed to start FF close process (not feasible or error){Colors.END}")
+        
+        except Exception as e:
+            print(f"{Colors.RED}❌ Error starting FF close process: {e}{Colors.END}")
+            import traceback
+            traceback.print_exc()
+    
+    def do_ff_info(self, args):
+        """Get current forward factor for a calendar spread (informational only)."""
+        parser = argparse.ArgumentParser(prog='ff_info', add_help=False)
+        parser.add_argument('symbol', help='Underlying symbol (e.g., SPY)')
+        parser.add_argument('short_expiration', help='Short leg expiration (YYYY-MM-DD)')
+        parser.add_argument('long_expiration', help='Long leg expiration (YYYY-MM-DD)')
+        parser.add_argument('strike', type=float, help='Strike price for both legs')
+        
+        try:
+            parsed_args = parser.parse_args(shlex.split(args))
+        except SystemExit:
+            print("Usage: ff_info <symbol> <short_exp> <long_exp> <strike>")
+            print("Example: ff_info SPY 2025-02-16 2025-03-15 500.00")
+            return
+        
+        if not self.default_account:
+            print(f"{Colors.RED}❌ No default account set. Use 'set default account <id>' first.{Colors.END}")
+            return
+        
+        try:
+            # Import ForwardFactorAnalyzer
+            from forward_factor_analyzer import ForwardFactorAnalyzer
+            analyzer = ForwardFactorAnalyzer(self.client, self.default_account)
+            
+            # Get market data
+            from public_brokerage.market_data import get_quotes, get_option_chain
+            from public_brokerage.models.common import Instrument, InstrumentType
+            from datetime import datetime
+            
+            symbol = parsed_args.symbol.upper()
+            short_exp = parsed_args.short_expiration
+            long_exp = parsed_args.long_expiration
+            strike = parsed_args.strike
+            
+            # Get quote and chains
+            instrument = Instrument(symbol=symbol, type=InstrumentType.EQUITY)
+            quotes = get_quotes(self.client, self.default_account, [instrument])
+            if not quotes or len(quotes) == 0:
+                print(f"{Colors.RED}❌ No quote found for {symbol}{Colors.END}")
+                return
+            underlying_price = float(quotes[0].last) if quotes[0].last else None
+            if not underlying_price:
+                print(f"{Colors.RED}❌ Invalid quote for {symbol}{Colors.END}")
+                return
+            
+            short_date = datetime.strptime(short_exp, "%Y-%m-%d").date()
+            long_date = datetime.strptime(long_exp, "%Y-%m-%d").date()
+            short_chain = get_option_chain(self.client, self.default_account, instrument, short_date)
+            long_chain = get_option_chain(self.client, self.default_account, instrument, long_date)
+            
+            # Find specific options
+            short_option = analyzer._find_option_in_chain(short_chain, strike)
+            long_option = analyzer._find_option_in_chain(long_chain, strike)
+            
+            if not short_option or not long_option:
+                print(f"{Colors.RED}❌ Could not find strike {strike} in option chains{Colors.END}")
+                return
+            
+            # Calculate spread pricing
+            spread_bid = long_option['bid'] - short_option['ask']
+            spread_ask = long_option['ask'] - short_option['bid']
+            spread_mid = (spread_bid + spread_ask) / 2
+            
+            # Calculate individual option MID prices for IV calculation
+            short_mid = (short_option['bid'] + short_option['ask']) / 2
+            long_mid = (long_option['bid'] + long_option['ask']) / 2
+            
+            # Calculate DTEs
+            from datetime import datetime
+            today = datetime.now().date()
+            short_date = datetime.strptime(short_exp, "%Y-%m-%d").date()
+            long_date = datetime.strptime(long_exp, "%Y-%m-%d").date()
+            short_dte = (short_date - today).days
+            long_dte = (long_date - today).days
+            
+            # Calculate FF at BID, MID, and ASK execution prices
+            # Different execution prices → different option IVs → different FFs
+            from utils.black_scholes import estimate_iv_from_price
+            from utils.forward_factor import calculate_forward_factor_from_ivs
+            
+            short_dte_years = short_dte / 365.0
+            long_dte_years = long_dte / 365.0
+            
+            # Helper function to safely calculate IV
+            def safe_estimate_iv(price, S, K, T, r, min_price=0.01):
+                """Estimate IV only if price is valid"""
+                if price < min_price:
+                    return None
+                try:
+                    return estimate_iv_from_price(price, S, K, T, r)
+                except Exception as e:
+                    logger.warning(f"IV estimation failed for price=${price:.2f}: {e}")
+                    return None
+            
+            # When buying calendar spread at BID (best execution):
+            # - We SELL short leg at their ASK (we receive less)
+            # - We BUY long leg at their BID (we pay less)
+            short_iv_at_bid = safe_estimate_iv(
+                short_option['ask'], underlying_price, strike, short_dte_years, 0.045
+            )
+            long_iv_at_bid = safe_estimate_iv(
+                long_option['bid'], underlying_price, strike, long_dte_years, 0.045
+            )
+            ff_at_bid = None
+            if short_iv_at_bid is not None and long_iv_at_bid is not None:
+                ff_at_bid = calculate_forward_factor_from_ivs(
+                    front_iv=short_iv_at_bid,
+                    front_dte=short_dte,
+                    back_iv=long_iv_at_bid,
+                    back_dte=long_dte
+                )
+            
+            # At MID prices (expected execution):
+            short_iv_at_mid = safe_estimate_iv(
+                short_mid, underlying_price, strike, short_dte_years, 0.045
+            )
+            long_iv_at_mid = safe_estimate_iv(
+                long_mid, underlying_price, strike, long_dte_years, 0.045
+            )
+            ff_at_mid = None
+            if short_iv_at_mid is not None and long_iv_at_mid is not None:
+                ff_at_mid = calculate_forward_factor_from_ivs(
+                    front_iv=short_iv_at_mid,
+                    front_dte=short_dte,
+                    back_iv=long_iv_at_mid,
+                    back_dte=long_dte
+                )
+            
+            # When buying calendar spread at ASK (worst execution):
+            # - We SELL short leg at their BID (we receive more)
+            # - We BUY long leg at their ASK (we pay more)
+            short_iv_at_ask = safe_estimate_iv(
+                short_option['bid'], underlying_price, strike, short_dte_years, 0.045
+            )
+            long_iv_at_ask = safe_estimate_iv(
+                long_option['ask'], underlying_price, strike, long_dte_years, 0.045
+            )
+            ff_at_ask = None
+            if short_iv_at_ask is not None and long_iv_at_ask is not None:
+                ff_at_ask = calculate_forward_factor_from_ivs(
+                    front_iv=short_iv_at_ask,
+                    front_dte=short_dte,
+                    back_iv=long_iv_at_ask,
+                    back_dte=long_dte
+                )
+            
+            # Use MID IVs for display
+            short_iv = short_iv_at_mid
+            long_iv = long_iv_at_mid
+            
+            # Display results
+            print(f"\n{Colors.BOLD}{Colors.CYAN}═══════════════════════════════════════════════════════════{Colors.END}")
+            print(f"{Colors.BOLD}{Colors.CYAN}   FORWARD FACTOR INFORMATION{Colors.END}")
+            print(f"{Colors.BOLD}{Colors.CYAN}═══════════════════════════════════════════════════════════{Colors.END}")
+            
+            print(f"\n{Colors.BOLD}📈 Underlying:{Colors.END}")
+            print(f"   {symbol} @ ${underlying_price:.2f}")
+            
+            print(f"\n{Colors.BOLD}📅 Calendar Spread:{Colors.END}")
+            print(f"   Short: {short_exp} ({short_dte} DTE) @ ${strike}")
+            print(f"   Long:  {long_exp} ({long_dte} DTE) @ ${strike}")
+            
+            print(f"\n{Colors.BOLD}💰 Spread Pricing:{Colors.END}")
+            print(f"   BID: ${spread_bid:.2f}")
+            print(f"   MID: ${spread_mid:.2f}")
+            print(f"   ASK: ${spread_ask:.2f}")
+            
+            print(f"\n{Colors.BOLD}💵 Individual Option Prices:{Colors.END}")
+            print(f"   Short Leg: BID ${short_option['bid']:.2f} / ASK ${short_option['ask']:.2f} / MID ${short_mid:.2f}")
+            print(f"   Long Leg:  BID ${long_option['bid']:.2f} / ASK ${long_option['ask']:.2f} / MID ${long_mid:.2f}")
+            
+            print(f"\n{Colors.BOLD}📊 Implied Volatility (at MID prices):{Colors.END}")
+            if short_iv is not None and long_iv is not None:
+                print(f"   Short Leg IV: {short_iv:.1%}")
+                print(f"   Long Leg IV:  {long_iv:.1%}")
+                print(f"   IV Skew: {(short_iv - long_iv) * 100:.2f}%")
+            else:
+                print(f"   {Colors.YELLOW}⚠️  Could not calculate IV from option prices{Colors.END}")
+            
+            print(f"\n{Colors.BOLD}🔮 Forward Factor Range:{Colors.END}")
+            if ff_at_bid is not None and ff_at_mid is not None and ff_at_ask is not None:
+                print(f"   At BID ${spread_bid:.2f}: {Colors.BOLD}{ff_at_bid:+.3f}{Colors.END}")
+                print(f"   At MID ${spread_mid:.2f}: {Colors.BOLD}{ff_at_mid:+.3f}{Colors.END}")
+                print(f"   At ASK ${spread_ask:.2f}: {Colors.BOLD}{ff_at_ask:+.3f}{Colors.END}")
+                print(f"   ")
+                print(f"   Note: Different execution prices → different option IVs → different FFs")
+            else:
+                print(f"   {Colors.YELLOW}⚠️  Could not calculate FF range:{Colors.END}")
+                print(f"      BID calculation: {'✓' if ff_at_bid is not None else '✗ (short@${:.2f}, long@${:.2f})'.format(short_option['ask'], long_option['bid'])}")
+                print(f"      MID calculation: {'✓' if ff_at_mid is not None else '✗ (short@${:.2f}, long@${:.2f})'.format(short_mid, long_mid)}")
+                print(f"      ASK calculation: {'✓' if ff_at_ask is not None else '✗ (short@${:.2f}, long@${:.2f})'.format(short_option['bid'], long_option['ask'])}")
+            
+            # Interpretation based on MID
+            if ff_at_mid is not None:
+                print(f"\n{Colors.BOLD}💡 Interpretation (at MID price):{Colors.END}")
+                ff_color = Colors.GREEN if ff_at_mid >= 0.2 else Colors.YELLOW if ff_at_mid >= 0 else Colors.RED
+                print(f"   Forward Factor: {ff_color}{ff_at_mid:+.3f}{Colors.END}")
+                
+                if ff_at_mid > 0.5:
+                    print(f"   {Colors.GREEN}✅ Strong Backwardation{Colors.END} - Front IV very high")
+                    print(f"   → Excellent opportunity to OPEN calendar spread")
+                elif ff_at_mid > 0.2:
+                    print(f"   {Colors.GREEN}✅ Moderate Backwardation{Colors.END} - Front IV elevated")
+                    print(f"   → Good opportunity to OPEN calendar spread")
+                elif ff_at_mid > 0:
+                    print(f"   {Colors.YELLOW}⚠️  Slight Backwardation{Colors.END} - Near fair value")
+                    print(f"   → Marginal opening opportunity")
+                elif ff_at_mid > -0.2:
+                    print(f"   {Colors.YELLOW}⚠️  Slight Contango{Colors.END} - Near fair value")
+                    print(f"   → Consider CLOSING existing positions")
+                else:
+                    print(f"   {Colors.RED}❌ Strong Contango{Colors.END} - Front IV too low")
+                    print(f"   → Good opportunity to CLOSE existing positions")
+            
+            print(f"\n{Colors.BOLD}📝 Notes:{Colors.END}")
+            print(f"   • FF > 0.2 typically good for opening calendars")
+            print(f"   • FF < 0.0 typically good for closing calendars")
+            print(f"   • Use --min_ff and --max_ff flags with open_ff/close_ff commands")
+            
+            print(f"{Colors.BOLD}{Colors.CYAN}═══════════════════════════════════════════════════════════{Colors.END}\n")
+        
+        except Exception as e:
+            print(f"{Colors.RED}❌ Error calculating FF info: {e}{Colors.END}")
+            import traceback
+            traceback.print_exc()
+    
     def do_status(self, args):
         """Show status of all background processes."""
         try:
@@ -804,14 +1189,77 @@ Initializing...
             # Analyze positions for spreads
             analysis = self.position_analyzer.analyze_positions(portfolio.positions)
             
-            # Show spreads first
+            # Show spreads first with FF analysis
             if analysis['call_spreads']:
-                print(f"{Colors.BOLD}📊 CALL SPREADS:{Colors.END}")
-                for spread in analysis['call_spreads']:
-                    summary = self.position_analyzer.get_spread_summary(spread)
-                    print(f"  {summary['underlying']}: {summary['short_strike']}/{summary['long_strike']} "
-                          f"x{summary['quantity']} (Exp: {summary['expiration']})")
-                print()
+                print(f"{Colors.BOLD}📊 CALENDAR SPREADS WITH FORWARD FACTOR ANALYSIS:{Colors.END}")
+                print("=" * 100)
+                
+                # Import ForwardFactorAnalyzer
+                try:
+                    from forward_factor_analyzer import ForwardFactorAnalyzer
+                    analyzer = ForwardFactorAnalyzer(self.client, account_id)
+                    
+                    for spread in analysis['call_spreads']:
+                        summary = self.position_analyzer.get_spread_summary(spread)
+                        
+                        # Check if this is a calendar spread (same strike, different expirations)
+                        is_calendar = summary['short_strike'] == summary['long_strike']
+                        
+                        if is_calendar:
+                            # Analyze FF for calendar spreads
+                            try:
+                                underlying = summary['underlying']
+                                strike = summary['short_strike']
+                                short_exp = spread.short_leg.expiration_date.strftime('%Y-%m-%d')
+                                long_exp = spread.long_leg.expiration_date.strftime('%Y-%m-%d')
+                                
+                                ff_analysis = analyzer.analyze_calendar_spread_for_reporting(
+                                    symbol=underlying,
+                                    short_exp=short_exp,
+                                    long_exp=long_exp,
+                                    strike=strike
+                                )
+                                
+                                if ff_analysis:
+                                    ff = ff_analysis['forward_factor']
+                                    ff_color = Colors.GREEN if ff >= 0.2 else Colors.YELLOW if ff >= 0 else Colors.RED
+                                    
+                                    print(f"\n{Colors.BOLD}{underlying} ${strike} Calendar{Colors.END} - {short_exp} / {long_exp}")
+                                    print(f"  Quantity: {summary['quantity']} spreads")
+                                    print(f"  Spread MID: ${ff_analysis['spread_mid']:.2f} (BID: ${ff_analysis['spread_bid']:.2f}, ASK: ${ff_analysis['spread_ask']:.2f})")
+                                    print(f"  Short IV: {ff_analysis['short_iv']:.1%} | Long IV: {ff_analysis['long_iv']:.1%}")
+                                    print(f"  {Colors.BOLD}Forward Factor: {ff_color}{ff:+.3f}{Colors.END}")
+                                    if ff > 0.2:
+                                        print(f"  {Colors.GREEN}✅ Still in contango - consider holding{Colors.END}")
+                                    elif ff > 0:
+                                        print(f"  {Colors.YELLOW}⚠️  Near fair value - monitor closely{Colors.END}")
+                                    else:
+                                        print(f"  {Colors.RED}❌ Backwardation - consider closing{Colors.END}")
+                                    
+                                    # Show ATF rates
+                                    if 'short_atf_rate' in ff_analysis and 'long_atf_rate' in ff_analysis:
+                                        print(f"  ATF Rates: Short {ff_analysis['short_atf_rate']*100:.2f}% | Long {ff_analysis['long_atf_rate']*100:.2f}%")
+                                        
+                            except Exception as e:
+                                # Fallback to basic display if FF analysis fails
+                                print(f"\n{summary['underlying']}: {summary['short_strike']}/{summary['long_strike']} "
+                                      f"x{summary['quantity']} (Exp: {summary['expiration']}) - FF analysis unavailable")
+                        else:
+                            # Non-calendar spread (different strikes) - just show basic info
+                            print(f"\n{summary['underlying']}: {summary['short_strike']}/{summary['long_strike']} "
+                                  f"x{summary['quantity']} (Exp: {summary['expiration']}) - Vertical Spread")
+                    
+                    print("\n" + "=" * 100)
+                    print()
+                    
+                except ImportError:
+                    # Fallback if FF analyzer not available
+                    print(f"{Colors.BOLD}📊 CALL SPREADS:{Colors.END}")
+                    for spread in analysis['call_spreads']:
+                        summary = self.position_analyzer.get_spread_summary(spread)
+                        print(f"  {summary['underlying']}: {summary['short_strike']}/{summary['long_strike']} "
+                              f"x{summary['quantity']} (Exp: {summary['expiration']})")
+                    print()
             
             # Calculate total portfolio P&L
             total_current_value = 0.0

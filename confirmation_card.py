@@ -749,3 +749,286 @@ class ConfirmationCard:
             print(f"   • Consider closing at 25-50% max profit")
         
         input("\nPress Enter to continue...")
+    
+    def display_ff_confirmation(
+        self,
+        symbol: str,
+        short_expiration: str,
+        long_expiration: str,
+        strike: float,
+        quantity: int,
+        ff_threshold: float,
+        is_opening: bool,
+        max_wait_time: int = 42,
+        account_id: Optional[str] = None,
+        execute: bool = False,
+        analyzer=None  # ForwardFactorAnalyzer instance
+    ) -> bool:
+        """
+        Display confirmation card for forward factor based calendar spread trades.
+        
+        Args:
+            symbol: Underlying symbol
+            short_expiration: Short leg expiration (YYYY-MM-DD)
+            long_expiration: Long leg expiration (YYYY-MM-DD)
+            strike: Strike price for both legs
+            quantity: Number of spreads
+            ff_threshold: FF threshold (min_ff for opening, max_ff for closing)
+            is_opening: True for opening, False for closing
+            max_wait_time: Max wait time per price level
+            account_id: Account ID
+            execute: Whether to execute actual orders
+            analyzer: ForwardFactorAnalyzer instance (required)
+            
+        Returns:
+            True if user confirms, False if cancelled
+        """
+        try:
+            action = "OPENING" if is_opening else "CLOSING"
+            print("\n" + "=" * 80)
+            print(f"📋 FORWARD FACTOR CALENDAR SPREAD - {action}")
+            print("=" * 80)
+            
+            # Get account ID if not provided
+            if not account_id:
+                from config import config
+                account_id = config.get_default_account()
+                
+            if not account_id:
+                print(f"❌ No account ID available")
+                return False
+            
+            if analyzer is None:
+                print(f"❌ ForwardFactorAnalyzer required")
+                return False
+            
+            # Get underlying quote
+            underlying_quote = self._get_underlying_quote(symbol, account_id)
+            if not underlying_quote:
+                print(f"❌ Could not fetch quote for {symbol}")
+                return False
+            
+            print(f"📈 Underlying: {symbol} @ ${underlying_quote.last}")
+            if underlying_quote.bid and underlying_quote.ask:
+                print(f"📊 Bid/Ask: ${underlying_quote.bid} / ${underlying_quote.ask}")
+            print("-" * 80)
+            
+            # Get option chain data
+            from public_brokerage.market_data import MarketDataAPI
+            market_data = MarketDataAPI(self.client)
+            
+            short_chain = market_data.get_option_chain(symbol, short_expiration)
+            long_chain = market_data.get_option_chain(symbol, long_expiration)
+            
+            # Find specific options
+            short_option = analyzer._find_option_in_chain(short_chain, strike)
+            long_option = analyzer._find_option_in_chain(long_chain, strike)
+            
+            if not short_option or not long_option:
+                print(f"❌ Could not find strike {strike} in option chains")
+                return False
+            
+            # Calculate spread pricing
+            spread_bid = long_option['bid'] - short_option['ask']
+            spread_ask = long_option['ask'] - short_option['bid']
+            spread_mid = (spread_bid + spread_ask) / 2
+            spread_width = spread_ask - spread_bid
+            
+            # Calculate DTEs
+            from datetime import datetime
+            today = datetime.now().date()
+            short_date = datetime.strptime(short_expiration, "%Y-%m-%d").date()
+            long_date = datetime.strptime(long_expiration, "%Y-%m-%d").date()
+            short_dte = (short_date - today).days
+            long_dte = (long_date - today).days
+            
+            print("🔴 SHORT LEG:")
+            print(f"   Expiration: {short_expiration} ({short_dte} DTE)")
+            print(f"   Strike: ${strike}")
+            print(f"   Bid/Ask: ${short_option['bid']:.2f} / ${short_option['ask']:.2f}")
+            print(f"   IV: {short_option['impliedVolatility']:.1%}")
+            
+            print("\n🟢 LONG LEG:")
+            print(f"   Expiration: {long_expiration} ({long_dte} DTE)")
+            print(f"   Strike: ${strike}")
+            print(f"   Bid/Ask: ${long_option['bid']:.2f} / ${long_option['ask']:.2f}")
+            print(f"   IV: {long_option['impliedVolatility']:.1%}")
+            
+            print("\n💰 SPREAD PRICING:")
+            print(f"   Bid:   ${spread_bid:.2f}")
+            print(f"   Mid:   ${spread_mid:.2f}")
+            print(f"   Ask:   ${spread_ask:.2f}")
+            print(f"   Width: ${spread_width:.2f}")
+            
+            # Calculate current FF and target price
+            try:
+                current_ff = analyzer.calculate_ff_at_spread_price(
+                    spread_price=spread_mid,
+                    underlying_price=underlying_quote.last,
+                    short_exp=short_expiration,
+                    long_exp=long_expiration,
+                    strike=strike,
+                    option_chain_short=short_chain,
+                    option_chain_long=long_chain
+                )
+                
+                target_price = analyzer.solve_for_spread_price_at_ff(
+                    target_ff=ff_threshold,
+                    underlying_price=underlying_quote.last,
+                    short_exp=short_expiration,
+                    long_exp=long_expiration,
+                    strike=strike,
+                    option_chain_short=short_chain,
+                    option_chain_long=long_chain,
+                    current_spread_mid=spread_mid
+                )
+                
+                print("\n📊 FORWARD FACTOR ANALYSIS:")
+                print(f"   Current FF (at MID): {current_ff:.3f}" if current_ff else "   Current FF: N/A")
+                print(f"   Target FF: {ff_threshold:.3f}")
+                
+                # Calculate ATF rates for display
+                short_atf_rate = analyzer.calculate_atf_drift(underlying_quote.last, short_chain, short_expiration, short_dte)
+                long_atf_rate = analyzer.calculate_atf_drift(underlying_quote.last, long_chain, long_expiration, long_dte)
+                print(f"   Short Leg ATF Rate: {short_atf_rate*100:.2f}% (market-implied)")
+                print(f"   Long Leg ATF Rate: {long_atf_rate*100:.2f}% (market-implied)")
+                
+                if target_price:
+                    print(f"   Target Spread Price: ${target_price:.2f}")
+                    
+                    # Feasibility analysis
+                    if is_opening:
+                        # Opening: Walk BID UP to target_price
+                        feasible = target_price >= spread_bid
+                        walk_direction = "BID → Target"
+                        start_price = spread_bid
+                        print(f"   Walk Strategy: {walk_direction}")
+                        print(f"   Start Price: ${start_price:.2f}")
+                        print(f"   Max Price: ${target_price:.2f}")
+                        if feasible:
+                            print(f"   ✅ FEASIBLE: Target >= BID")
+                        else:
+                            print(f"   ❌ NOT FEASIBLE: Target < BID (market too expensive)")
+                    else:
+                        # Closing: Walk ASK DOWN to target_price
+                        feasible = target_price <= spread_ask
+                        walk_direction = "ASK → Target"
+                        start_price = spread_ask
+                        print(f"   Walk Strategy: {walk_direction}")
+                        print(f"   Start Price: ${start_price:.2f}")
+                        print(f"   Min Price: ${target_price:.2f}")
+                        if feasible:
+                            print(f"   ✅ FEASIBLE: Target <= ASK")
+                        else:
+                            print(f"   ❌ NOT FEASIBLE: Target > ASK (market too cheap)")
+                    
+                    if not feasible:
+                        print("\n⚠️  WARNING: Trade is not feasible at current market prices")
+                        
+                else:
+                    print(f"   ❌ Could not solve for target price")
+                    
+            except Exception as e:
+                print(f"\n❌ Error calculating FF analysis: {e}")
+                return False
+            
+            # Trade summary
+            print("\n💼 TRADE SUMMARY:")
+            print(f"   Strategy: Forward Factor Calendar Spread")
+            print(f"   Action: {action}")
+            print(f"   Quantity: {quantity} spread(s)")
+            print(f"   Total Cost: ~${spread_mid * quantity * 100:.2f}" if is_opening else f"   Est. Credit: ~${spread_mid * quantity * 100:.2f}")
+            if execute:
+                print(f"   Mode: LIVE EXECUTION")
+                print(f"   Max Wait Time: {max_wait_time}s per price level")
+            else:
+                print(f"   Mode: DRY RUN (simulation)")
+                print(f"   Max Wait Time: 1s per level (dry run)")
+            
+            print("=" * 80)
+            
+            # Get user confirmation
+            while True:
+                response = input("Confirm trade? (y)es / (n)o / (d)etails: ").lower().strip()
+                
+                if response in ['y', 'yes']:
+                    return True
+                elif response in ['n', 'no']:
+                    print("❌ Trade cancelled by user")
+                    return False
+                elif response in ['d', 'details']:
+                    self._show_ff_detailed_analysis(
+                        symbol, short_option, long_option, 
+                        current_ff, ff_threshold, 
+                        underlying_quote.last, is_opening
+                    )
+                else:
+                    print("Please enter 'y', 'n', or 'd'")
+                    
+        except Exception as e:
+            logger.error(f"Error displaying FF confirmation: {e}", exc_info=True)
+            print(f"❌ Error displaying confirmation: {e}")
+            return False
+    
+    def _show_ff_detailed_analysis(
+        self,
+        symbol: str,
+        short_option: Dict,
+        long_option: Dict,
+        current_ff: Optional[float],
+        target_ff: float,
+        underlying_price: float,
+        is_opening: bool
+    ) -> None:
+        """Show detailed forward factor analysis."""
+        print("\n" + "=" * 80)
+        print("📊 DETAILED FORWARD FACTOR ANALYSIS")
+        print("=" * 80)
+        
+        print(f"\n📈 Forward Volatility Concept:")
+        print(f"   Forward volatility represents the market's expectation of")
+        print(f"   volatility between the front and back expiration dates.")
+        print(f"   ")
+        print(f"   Forward Factor (FF) = (Front IV - Forward Vol) / Forward Vol")
+        print(f"   ")
+        print(f"   FF > 0: Contango (front option more expensive than implied)")
+        print(f"   FF < 0: Backwardation (front option cheaper than implied)")
+        print(f"   FF = 0: Fair value (no mispricing)")
+        
+        print(f"\n🎯 Current Trade Analysis:")
+        print(f"   Underlying: {symbol} @ ${underlying_price:.2f}")
+        print(f"   Short Leg IV: {short_option['impliedVolatility']:.1%}")
+        print(f"   Long Leg IV: {long_option['impliedVolatility']:.1%}")
+        if current_ff is not None:
+            print(f"   Current FF: {current_ff:.3f}")
+            if current_ff > 0.5:
+                print(f"   → Strong contango (front leg expensive)")
+            elif current_ff > 0.2:
+                print(f"   → Moderate contango")
+            elif current_ff > -0.2:
+                print(f"   → Near fair value")
+            else:
+                print(f"   → Backwardation (front leg cheap)")
+        
+        print(f"\n🎲 Strategy Rationale:")
+        if is_opening:
+            print(f"   OPENING at FF >= {target_ff:.3f}:")
+            print(f"   • Buying calendar when front leg is relatively expensive")
+            print(f"   • Expecting mean reversion (FF to decrease)")
+            print(f"   • Profit if: Front decays faster or back gains value")
+        else:
+            print(f"   CLOSING at FF <= {target_ff:.3f}:")
+            print(f"   • Selling calendar when target FF reached")
+            print(f"   • Taking profit or cutting loss")
+            print(f"   • Goal: Exit at favorable FF level")
+        
+        print(f"\n⚠️  Risk Considerations:")
+        print(f"   • Calendar spreads are vega-positive (benefit from IV increase)")
+        print(f"   • Time decay: Front leg decays faster than back leg")
+        print(f"   • Pin risk: If underlying near strike at front expiration")
+        print(f"   • Gamma risk: Large moves can hurt calendars")
+        print(f"   • Early assignment risk if front leg is ITM")
+        
+        print("=" * 80)
+        input("\nPress Enter to continue...")
+

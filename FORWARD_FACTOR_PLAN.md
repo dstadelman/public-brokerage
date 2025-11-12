@@ -146,14 +146,3 @@ numpy>=1.24.0  # For numerical calculations
 5. ✅ Positions display shows FF for calendars
 6. ✅ All cancellation mechanisms work
 7. ✅ Comprehensive testing complete
-
----
-
-## Future Enhancements (Phase 7+)
-
-1. Historical FF tracking per ticker
-2. Dynamic max debit calculation from FF
-3. Earnings premium stripping (ex-earn FF)
-4. Multi-strike FF analysis
-5. FF-based position management alerts
-6. Web dashboard for FF opportunities

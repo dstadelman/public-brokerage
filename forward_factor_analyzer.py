@@ -448,7 +448,7 @@ class ForwardFactorAnalyzer:
     def calculate_atf_drift(
         self,
         underlying_price: float,
-        option_chain: Dict,
+        option_chain,  # Can be Dict or OptionChainResponse
         exp_date_str: str,
         dte: int
     ) -> float:
@@ -465,7 +465,7 @@ class ForwardFactorAnalyzer:
         
         Args:
             underlying_price: Current spot price
-            option_chain: Option chain with both calls and puts
+            option_chain: Option chain (Dict or OptionChainResponse) with both calls and puts
             exp_date_str: Expiration date (YYYY-MM-DD)
             dte: Days to expiration
             
@@ -475,38 +475,79 @@ class ForwardFactorAnalyzer:
         try:
             import numpy as np
             
-            # Extract calls and puts from chain
-            calls = option_chain.get('calls', [])
-            puts = option_chain.get('puts', [])
+            # Extract calls and puts from chain (handle both dict and OptionChainResponse)
+            if hasattr(option_chain, 'calls') and hasattr(option_chain, 'puts'):
+                # OptionChainResponse object
+                calls_list = option_chain.calls if option_chain.calls else []
+                puts_list = option_chain.puts if option_chain.puts else []
+            else:
+                # Dict format
+                calls_list = option_chain.get('calls', [])
+                puts_list = option_chain.get('puts', [])
             
-            if not calls or not puts:
+            if not calls_list or not puts_list:
                 logger.warning(f"No calls or puts for ATF calculation on {exp_date_str}, using mu=0")
                 return 0.0
             
             # Build dict of strike -> (call_mid, put_mid)
             strike_data = {}
             
+            # Helper to extract strike from option
+            def get_strike(option):
+                """Extract strike from option (Quote object or dict)"""
+                if hasattr(option, 'instrument'):
+                    # Quote object - parse from OSI symbol
+                    symbol_str = option.instrument.symbol
+                    option_strike_str = symbol_str[-8:]  # Last 8 digits are price * 1000
+                    return float(option_strike_str) / 1000.0
+                else:
+                    # Dict format
+                    return option.get('strike')
+            
+            def get_mid_price(option):
+                """Get mid price from option (Quote object or dict)"""
+                if hasattr(option, 'bid') and hasattr(option, 'ask'):
+                    # Quote object - convert to float to handle Decimal types
+                    bid = float(option.bid) if option.bid is not None else None
+                    ask = float(option.ask) if option.ask is not None else None
+                else:
+                    # Dict format
+                    bid = option.get('bid')
+                    ask = option.get('ask')
+                    if bid is not None:
+                        bid = float(bid)
+                    if ask is not None:
+                        ask = float(ask)
+                
+                if bid is not None and ask is not None:
+                    return (bid + ask) / 2.0
+                return None
+            
             # Process calls
-            for call in calls:
-                strike = call.get('strike')
-                bid = call.get('bid')
-                ask = call.get('ask')
-                if strike is not None and bid is not None and ask is not None:
-                    call_mid = (bid + ask) / 2
-                    if strike not in strike_data:
-                        strike_data[strike] = {'call': None, 'put': None}
-                    strike_data[strike]['call'] = call_mid
+            for call in calls_list:
+                try:
+                    strike = get_strike(call)
+                    call_mid = get_mid_price(call)
+                    if strike is not None and call_mid is not None:
+                        if strike not in strike_data:
+                            strike_data[strike] = {'call': None, 'put': None}
+                        strike_data[strike]['call'] = call_mid
+                except Exception as e:
+                    logger.debug(f"Could not process call option: {e}")
+                    continue
             
             # Process puts
-            for put in puts:
-                strike = put.get('strike')
-                bid = put.get('bid')
-                ask = put.get('ask')
-                if strike is not None and bid is not None and ask is not None:
-                    put_mid = (bid + ask) / 2
-                    if strike not in strike_data:
-                        strike_data[strike] = {'call': None, 'put': None}
-                    strike_data[strike]['put'] = put_mid
+            for put in puts_list:
+                try:
+                    strike = get_strike(put)
+                    put_mid = get_mid_price(put)
+                    if strike is not None and put_mid is not None:
+                        if strike not in strike_data:
+                            strike_data[strike] = {'call': None, 'put': None}
+                        strike_data[strike]['put'] = put_mid
+                except Exception as e:
+                    logger.debug(f"Could not process put option: {e}")
+                    continue
             
             # Filter to strikes with both call and put data
             valid_strikes = []
@@ -561,11 +602,173 @@ class ForwardFactorAnalyzer:
             mu = np.log(forward_price / underlying_price) / time_to_expiry
             
             logger.info(f"ATF Analysis ({exp_date_str}): Spot=${underlying_price:.2f}, "
-                       f"Forward=${forward_price:.2f}, Implied Drift={mu:.4f} ({mu*100:.2f}% annualized)")
+                       f"Forward=${forward_price:.2f}, DTE={dte}, T={time_to_expiry:.4f}, "
+                       f"Implied Drift={mu:.4f} ({mu*100:.2f}% annualized)")
             
             return mu
             
         except Exception as e:
             logger.error(f"Error calculating ATF drift for {exp_date_str}: {e}")
             return 0.0
+    
+    def calculate_ff_grid(
+        self,
+        short_bid: float,
+        short_ask: float,
+        long_bid: float,
+        long_ask: float,
+        underlying_price: float,
+        strike: float,
+        short_dte: int,
+        long_dte: int,
+        option_type: str = 'call'
+    ) -> List[Dict]:
+        """
+        Calculate forward factor at 20 discrete steps through the bid-ask spread.
+        
+        This is the grid-based algorithm from FORWARD_FACTOR_PLAN.md:
+        - For opening: pct=0 is BID execution (short@ask, long@bid), pct=1.0 is ASK execution
+        - For closing: reverse the interpretation
+        - At each step: interpolate prices → calculate IVs → calculate FF
+        
+        Args:
+            short_bid: Bid price for short leg option
+            short_ask: Ask price for short leg option
+            long_bid: Bid price for long leg option
+            long_ask: Ask price for long leg option
+            underlying_price: Current underlying price
+            strike: Strike price for both options
+            short_dte: Days to expiration for short leg
+            long_dte: Days to expiration for long leg
+            option_type: 'call' or 'put' (default: 'call')
+            
+        Returns:
+            List of 20 dicts with keys: pct, spread_price, ff, short_price, long_price, short_iv, long_iv
+        """
+        from utils.black_scholes import estimate_iv_from_price
+        from utils.forward_factor import calculate_forward_factor_from_ivs
+        
+        grid = []
+        num_steps = 20
+        
+        # Convert DTEs to years for Black-Scholes
+        short_t = short_dte / 365.0
+        long_t = long_dte / 365.0
+        
+        for i in range(num_steps + 1):
+            pct = i / num_steps
+            
+            # Interpolate option prices linearly through bid-ask spread
+            # For opening: pct=0 is BID execution, pct=1.0 is ASK execution
+            short_price = short_ask - (short_ask - short_bid) * pct  # Moving from ASK toward BID
+            long_price = long_bid + (long_ask - long_bid) * pct      # Moving from BID toward ASK
+            
+            # Calculate spread price (what we pay for calendar when opening)
+            spread_price = long_price - short_price
+            
+            # Estimate IV for each leg at these execution prices
+            try:
+                short_iv = estimate_iv_from_price(
+                    option_price=short_price,
+                    S=underlying_price,
+                    K=strike,
+                    T=short_t,
+                    r=0.0,  # Use ATF drift instead
+                    option_type=option_type
+                )
+                
+                long_iv = estimate_iv_from_price(
+                    option_price=long_price,
+                    S=underlying_price,
+                    K=strike,
+                    T=long_t,
+                    r=0.0,  # Use ATF drift instead
+                    option_type=option_type
+                )
+                
+                if short_iv is None or long_iv is None:
+                    logger.warning(f"Could not estimate IV at step {i} (pct={pct:.2f})")
+                    ff = None
+                else:
+                    # Calculate forward factor from IVs
+                    # Note: Short leg is front leg (expires first), long leg is back leg
+                    ff = calculate_forward_factor_from_ivs(
+                        front_iv=short_iv,
+                        front_dte=short_dte,
+                        back_iv=long_iv,
+                        back_dte=long_dte
+                    )
+                
+            except Exception as e:
+                logger.error(f"Error calculating FF at step {i}: {e}")
+                short_iv = None
+                long_iv = None
+                ff = None
+            
+            grid.append({
+                'pct': pct,
+                'spread_price': round(spread_price, 2),
+                'ff': ff,
+                'short_price': round(short_price, 2),
+                'long_price': round(long_price, 2),
+                'short_iv': short_iv,
+                'long_iv': long_iv
+            })
+        
+        return grid
+    
+    def find_target_price_for_ff(
+        self,
+        ff_grid: List[Dict],
+        target_ff: float,
+        direction: str = 'open'
+    ) -> Optional[Tuple[float, float, float]]:
+        """
+        Find target spread price where FF meets threshold.
+        
+        For opening: Find LAST step where FF >= target_ff (furthest acceptable price from BID)
+        For closing: Find LAST step where FF <= target_ff (furthest acceptable price from ASK)
+        
+        Args:
+            ff_grid: Grid from calculate_ff_grid()
+            target_ff: Target forward factor threshold (min_ff for opening, max_ff for closing)
+            direction: 'open' or 'close'
+            
+        Returns:
+            Tuple of (target_spread_price, target_pct, target_ff) or None if not feasible
+        """
+        if not ff_grid:
+            logger.error("Empty FF grid provided")
+            return None
+        
+        # Find LAST acceptable step (not first!)
+        last_acceptable = None
+        
+        for step in ff_grid:
+            ff = step['ff']
+            
+            # Skip steps where FF couldn't be calculated
+            if ff is None:
+                continue
+            
+            # Check if this step meets the threshold
+            if direction == 'open':
+                # Opening: we want FF >= target_ff
+                if ff >= target_ff:
+                    last_acceptable = step
+            else:
+                # Closing: we want FF <= target_ff
+                if ff <= target_ff:
+                    last_acceptable = step
+        
+        if last_acceptable is None:
+            logger.warning(f"No steps meet threshold FF {target_ff} for {direction}")
+            return None
+        
+        return (
+            last_acceptable['spread_price'],
+            last_acceptable['pct'],
+            last_acceptable['ff']
+        )
+
 

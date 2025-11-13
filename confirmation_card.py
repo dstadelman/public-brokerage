@@ -814,11 +814,15 @@ class ConfirmationCard:
             print("-" * 80)
             
             # Get option chain data
-            from public_brokerage.market_data import MarketDataAPI
-            market_data = MarketDataAPI(self.client)
+            from datetime import datetime
+            from public_brokerage.models.common import Instrument, InstrumentType
             
-            short_chain = market_data.get_option_chain(symbol, short_expiration)
-            long_chain = market_data.get_option_chain(symbol, long_expiration)
+            instrument = Instrument(symbol=symbol, type=InstrumentType.EQUITY)
+            short_date = datetime.strptime(short_expiration, "%Y-%m-%d").date()
+            long_date = datetime.strptime(long_expiration, "%Y-%m-%d").date()
+            
+            short_chain = get_option_chain(self.client, account_id, instrument, short_date)
+            long_chain = get_option_chain(self.client, account_id, instrument, long_date)
             
             # Find specific options
             short_option = analyzer._find_option_in_chain(short_chain, strike)
@@ -846,13 +850,11 @@ class ConfirmationCard:
             print(f"   Expiration: {short_expiration} ({short_dte} DTE)")
             print(f"   Strike: ${strike}")
             print(f"   Bid/Ask: ${short_option['bid']:.2f} / ${short_option['ask']:.2f}")
-            print(f"   IV: {short_option['impliedVolatility']:.1%}")
             
             print("\n🟢 LONG LEG:")
             print(f"   Expiration: {long_expiration} ({long_dte} DTE)")
             print(f"   Strike: ${strike}")
             print(f"   Bid/Ask: ${long_option['bid']:.2f} / ${long_option['ask']:.2f}")
-            print(f"   IV: {long_option['impliedVolatility']:.1%}")
             
             print("\n💰 SPREAD PRICING:")
             print(f"   Bid:   ${spread_bid:.2f}")
@@ -860,76 +862,109 @@ class ConfirmationCard:
             print(f"   Ask:   ${spread_ask:.2f}")
             print(f"   Width: ${spread_width:.2f}")
             
-            # Calculate current FF and target price
+            # Calculate FF grid using new grid-based approach
             try:
-                current_ff = analyzer.calculate_ff_at_spread_price(
-                    spread_price=spread_mid,
-                    underlying_price=underlying_quote.last,
-                    short_exp=short_expiration,
-                    long_exp=long_expiration,
-                    strike=strike,
-                    option_chain_short=short_chain,
-                    option_chain_long=long_chain
+                # Calculate FF grid (20 steps through bid-ask spread)
+                ff_grid = analyzer.calculate_ff_grid(
+                    short_bid=float(short_option['bid']),
+                    short_ask=float(short_option['ask']),
+                    long_bid=float(long_option['bid']),
+                    long_ask=float(long_option['ask']),
+                    underlying_price=float(underlying_quote.last),
+                    strike=float(strike),
+                    short_dte=short_dte,
+                    long_dte=long_dte
                 )
                 
-                target_price = analyzer.solve_for_spread_price_at_ff(
-                    target_ff=ff_threshold,
-                    underlying_price=underlying_quote.last,
-                    short_exp=short_expiration,
-                    long_exp=long_expiration,
-                    strike=strike,
-                    option_chain_short=short_chain,
-                    option_chain_long=long_chain,
-                    current_spread_mid=spread_mid
-                )
+                # Get FF at key execution points
+                ff_at_bid = ff_grid[0]['ff'] if ff_grid and ff_grid[0]['ff'] is not None else None
+                ff_at_mid = None
+                ff_at_ask = ff_grid[-1]['ff'] if ff_grid and ff_grid[-1]['ff'] is not None else None
                 
-                print("\n📊 FORWARD FACTOR ANALYSIS:")
-                print(f"   Current FF (at MID): {current_ff:.3f}" if current_ff else "   Current FF: N/A")
-                print(f"   Target FF: {ff_threshold:.3f}")
+                # Find mid point in grid (closest to 50%)
+                for step in ff_grid:
+                    if abs(step['pct'] - 0.5) < 0.05:  # Within 5% of midpoint
+                        if step['ff'] is not None:
+                            ff_at_mid = step['ff']
+                            break
+                
+                # Find target price using grid
+                direction = 'open' if is_opening else 'close'
+                result = analyzer.find_target_price_for_ff(ff_grid, target_ff=ff_threshold, direction=direction)
+                
+                print("\n📊 FORWARD FACTOR ANALYSIS (Grid-Based):")
+                print(f"   Target FF Threshold: {ff_threshold:.3f}")
+                
+                # Display FF at key points
+                print(f"\n   FF Range Across Bid-Ask Spread:")
+                if ff_at_bid is not None:
+                    ff_str = f"{ff_at_bid:.3f}" if not float('inf') == ff_at_bid else "∞ (extreme backwardation)"
+                    print(f"   • At BID (${spread_bid:.2f}): FF = {ff_str}")
+                if ff_at_mid is not None:
+                    print(f"   • At MID (${spread_mid:.2f}): FF = {ff_at_mid:.3f}")
+                if ff_at_ask is not None:
+                    print(f"   • At ASK (${spread_ask:.2f}): FF = {ff_at_ask:.3f}")
                 
                 # Calculate ATF rates for display
-                short_atf_rate = analyzer.calculate_atf_drift(underlying_quote.last, short_chain, short_expiration, short_dte)
-                long_atf_rate = analyzer.calculate_atf_drift(underlying_quote.last, long_chain, long_expiration, long_dte)
-                print(f"   Short Leg ATF Rate: {short_atf_rate*100:.2f}% (market-implied)")
-                print(f"   Long Leg ATF Rate: {long_atf_rate*100:.2f}% (market-implied)")
+                short_atf_rate = analyzer.calculate_atf_drift(float(underlying_quote.last), short_chain, short_expiration, short_dte)
+                long_atf_rate = analyzer.calculate_atf_drift(float(underlying_quote.last), long_chain, long_expiration, long_dte)
+                print(f"\n   Market-Implied Drift Rates:")
+                print(f"   • Short Leg ATF: {short_atf_rate*100:.2f}%")
+                print(f"   • Long Leg ATF: {long_atf_rate*100:.2f}%")
                 
-                if target_price:
-                    print(f"   Target Spread Price: ${target_price:.2f}")
+                # Show target and feasibility
+                if result:
+                    target_price, target_pct, target_ff = result
+                    print(f"\n   🎯 Target Found:")
+                    print(f"   • Target Price: ${target_price:.2f} ({target_pct:.1%} through spread)")
+                    print(f"   • FF at Target: {target_ff:.3f}")
                     
-                    # Feasibility analysis
+                    # Walk strategy
                     if is_opening:
                         # Opening: Walk BID UP to target_price
-                        feasible = target_price >= spread_bid
-                        walk_direction = "BID → Target"
-                        start_price = spread_bid
-                        print(f"   Walk Strategy: {walk_direction}")
-                        print(f"   Start Price: ${start_price:.2f}")
-                        print(f"   Max Price: ${target_price:.2f}")
-                        if feasible:
-                            print(f"   ✅ FEASIBLE: Target >= BID")
-                        else:
-                            print(f"   ❌ NOT FEASIBLE: Target < BID (market too expensive)")
+                        feasible = True  # Already checked by find_target_price_for_ff
+                        walk_direction = f"BID (${spread_bid:.2f}) → Target (${target_price:.2f})"
+                        capture_range = f"${spread_bid:.2f} to ${target_price:.2f}"
+                        print(f"\n   🚶 Walk Strategy:")
+                        print(f"   • Direction: {walk_direction}")
+                        print(f"   • Capture ALL prices in range: {capture_range}")
+                        print(f"   • ALL steps have FF >= {ff_threshold:.3f} ✓")
+                        print(f"   • ✅ FEASIBLE: Walk captures {int(target_pct * 20)} of 20 grid steps")
                     else:
                         # Closing: Walk ASK DOWN to target_price
-                        feasible = target_price <= spread_ask
-                        walk_direction = "ASK → Target"
-                        start_price = spread_ask
-                        print(f"   Walk Strategy: {walk_direction}")
-                        print(f"   Start Price: ${start_price:.2f}")
-                        print(f"   Min Price: ${target_price:.2f}")
-                        if feasible:
-                            print(f"   ✅ FEASIBLE: Target <= ASK")
-                        else:
-                            print(f"   ❌ NOT FEASIBLE: Target > ASK (market too cheap)")
-                    
-                    if not feasible:
-                        print("\n⚠️  WARNING: Trade is not feasible at current market prices")
-                        
+                        feasible = True
+                        walk_direction = f"ASK (${spread_ask:.2f}) → Target (${target_price:.2f})"
+                        capture_range = f"${target_price:.2f} to ${spread_ask:.2f}"
+                        print(f"\n   🚶 Walk Strategy:")
+                        print(f"   • Direction: {walk_direction}")
+                        print(f"   • Capture ALL prices in range: {capture_range}")
+                        print(f"   • ALL steps have FF <= {ff_threshold:.3f} ✓")
+                        print(f"   • ✅ FEASIBLE: Walk captures {int(target_pct * 20)} of 20 grid steps")
                 else:
-                    print(f"   ❌ Could not solve for target price")
+                    # Not feasible
+                    feasible = False
+                    print(f"\n   ❌ NOT FEASIBLE:")
+                    if is_opening:
+                        print(f"   • No price in bid-ask range achieves FF >= {ff_threshold:.3f}")
+                        if ff_at_bid is not None:
+                            print(f"   • Best available FF: {ff_at_bid:.3f} at BID")
+                            if ff_at_bid < ff_threshold:
+                                suggested = ff_at_bid * 0.9  # Suggest 10% lower threshold
+                                print(f"   • Try lower threshold: --min_ff={suggested:.3f}")
+                    else:
+                        print(f"   • No price in bid-ask range achieves FF <= {ff_threshold:.3f}")
+                        if ff_at_ask is not None:
+                            print(f"   • Best available FF: {ff_at_ask:.3f} at ASK")
+                            if ff_at_ask > ff_threshold:
+                                suggested = ff_at_ask * 1.1  # Suggest 10% higher threshold
+                                print(f"   • Try higher threshold: --max_ff={suggested:.3f}")
+                    
+                    print("\n⚠️  WARNING: Trade is not feasible at current market prices")
                     
             except Exception as e:
-                print(f"\n❌ Error calculating FF analysis: {e}")
+                print(f"\n❌ Error calculating FF grid analysis: {e}")
+                import traceback
+                traceback.print_exc()
                 return False
             
             # Trade summary
@@ -957,9 +992,11 @@ class ConfirmationCard:
                     print("❌ Trade cancelled by user")
                     return False
                 elif response in ['d', 'details']:
+                    # Use ff_at_mid as "current_ff" for detailed analysis
+                    display_ff = ff_at_mid if ff_at_mid is not None else (ff_at_bid if ff_at_bid is not None else ff_at_ask)
                     self._show_ff_detailed_analysis(
                         symbol, short_option, long_option, 
-                        current_ff, ff_threshold, 
+                        display_ff, ff_threshold, 
                         underlying_quote.last, is_opening
                     )
                 else:

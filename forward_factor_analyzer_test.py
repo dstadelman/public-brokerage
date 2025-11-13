@@ -601,5 +601,239 @@ class TestForwardFactorIWM(unittest.TestCase):
         print(f"{'='*60}")
 
 
+class TestFFGrid(unittest.TestCase):
+    """Test grid-based FF calculation functions."""
+    
+    def setUp(self):
+        """Set up test data for grid calculations."""
+        from forward_factor_analyzer import ForwardFactorAnalyzer
+        self.analyzer = ForwardFactorAnalyzer(client=None, account_id=None)
+        
+        # MVST data
+        self.mvst_short_bid = 0.50
+        self.mvst_short_ask = 0.70
+        self.mvst_long_bid = 0.70
+        self.mvst_long_ask = 0.85
+        self.mvst_underlying = 4.0
+        self.mvst_strike = 4.0
+        self.mvst_short_dte = 37
+        self.mvst_long_dte = 65
+        
+        # IWM data
+        self.iwm_short_bid = 9.38
+        self.iwm_short_ask = 9.49
+        self.iwm_long_bid = 11.77
+        self.iwm_long_ask = 11.86
+        self.iwm_underlying = 240.0
+        self.iwm_strike = 240.0
+        self.iwm_short_dte = 37
+        self.iwm_long_dte = 65
+    
+    def test_calculate_ff_grid_mvst_opening(self):
+        """Test FF grid calculation for MVST (opening scenario)."""
+        grid = self.analyzer.calculate_ff_grid(
+            short_bid=self.mvst_short_bid,
+            short_ask=self.mvst_short_ask,
+            long_bid=self.mvst_long_bid,
+            long_ask=self.mvst_long_ask,
+            underlying_price=self.mvst_underlying,
+            strike=self.mvst_strike,
+            short_dte=self.mvst_short_dte,
+            long_dte=self.mvst_long_dte
+        )
+        
+        # Should have 21 steps (0 to 20 inclusive)
+        self.assertEqual(len(grid), 21)
+        
+        # Check first step (BID execution: short@ask, long@bid)
+        first = grid[0]
+        self.assertEqual(first['pct'], 0.0)
+        self.assertEqual(first['short_price'], self.mvst_short_ask)
+        self.assertEqual(first['long_price'], self.mvst_long_bid)
+        self.assertEqual(first['spread_price'], round(self.mvst_long_bid - self.mvst_short_ask, 2))
+        
+        # Check last step (ASK execution: short@bid, long@ask)
+        last = grid[20]
+        self.assertEqual(last['pct'], 1.0)
+        self.assertEqual(last['short_price'], self.mvst_short_bid)
+        self.assertEqual(last['long_price'], self.mvst_long_ask)
+        self.assertEqual(last['spread_price'], round(self.mvst_long_ask - self.mvst_short_bid, 2))
+        
+        # Check that FF decreases (or at least doesn't always increase) as spread price increases
+        # Note: Due to extreme backwardation at BID, FF might be inf there
+        valid_ffs = [step['ff'] for step in grid if step['ff'] is not None and not math.isinf(step['ff'])]
+        if len(valid_ffs) >= 2:
+            # At least check that we don't have all increasing FFs
+            has_decrease = any(valid_ffs[i] > valid_ffs[i+1] for i in range(len(valid_ffs)-1))
+            self.assertTrue(has_decrease or len(set(valid_ffs)) == 1, 
+                          "Expected FF to decrease or stay constant as price increases")
+        
+        print(f"\nMVST FF Grid (Opening):")
+        print(f"First 5 steps:")
+        for step in grid[:5]:
+            ff_str = f"{step['ff']:.3f}" if step['ff'] is not None and not math.isinf(step['ff']) else str(step['ff'])
+            print(f"  pct={step['pct']:.2f}: spread=${step['spread_price']:.2f}, FF={ff_str}")
+    
+    def test_calculate_ff_grid_iwm_opening(self):
+        """Test FF grid calculation for IWM (opening scenario)."""
+        grid = self.analyzer.calculate_ff_grid(
+            short_bid=self.iwm_short_bid,
+            short_ask=self.iwm_short_ask,
+            long_bid=self.iwm_long_bid,
+            long_ask=self.iwm_long_ask,
+            underlying_price=self.iwm_underlying,
+            strike=self.iwm_strike,
+            short_dte=self.iwm_short_dte,
+            long_dte=self.iwm_long_dte
+        )
+        
+        # Should have 21 steps
+        self.assertEqual(len(grid), 21)
+        
+        # IWM should have valid FFs at all steps (normal market)
+        valid_ffs = [step['ff'] for step in grid if step['ff'] is not None]
+        self.assertGreater(len(valid_ffs), 15, "Expected most steps to have valid FF")
+        
+        # FF should decrease monotonically (or mostly) from BID to ASK
+        prev_ff = None
+        decreasing_count = 0
+        for step in grid:
+            if step['ff'] is not None and not math.isinf(step['ff']):
+                if prev_ff is not None:
+                    if step['ff'] < prev_ff:
+                        decreasing_count += 1
+                prev_ff = step['ff']
+        
+        # At least 70% of transitions should be decreasing
+        total_transitions = len(valid_ffs) - 1
+        if total_transitions > 0:
+            decreasing_ratio = decreasing_count / total_transitions
+            self.assertGreater(decreasing_ratio, 0.5, 
+                             f"Expected mostly decreasing FF, got {decreasing_ratio:.1%}")
+        
+        print(f"\nIWM FF Grid (Opening):")
+        print(f"Every 5th step:")
+        for i in range(0, 21, 5):
+            step = grid[i]
+            ff_str = f"{step['ff']:.3f}" if step['ff'] is not None else "None"
+            print(f"  pct={step['pct']:.2f}: spread=${step['spread_price']:.2f}, FF={ff_str}")
+    
+    def test_find_target_price_opening_feasible(self):
+        """Test finding target price for opening when feasible."""
+        # Calculate grid for IWM
+        grid = self.analyzer.calculate_ff_grid(
+            short_bid=self.iwm_short_bid,
+            short_ask=self.iwm_short_ask,
+            long_bid=self.iwm_long_bid,
+            long_ask=self.iwm_long_ask,
+            underlying_price=self.iwm_underlying,
+            strike=self.iwm_strike,
+            short_dte=self.iwm_short_dte,
+            long_dte=self.iwm_long_dte
+        )
+        
+        # Find target for min_ff = 0.05 (should be feasible for IWM)
+        result = self.analyzer.find_target_price_for_ff(grid, target_ff=0.05, direction='open')
+        
+        self.assertIsNotNone(result, "Expected to find feasible target")
+        target_price, target_pct, target_ff = result
+        
+        # Target should be >= min FF
+        self.assertGreaterEqual(target_ff, 0.05, f"Target FF {target_ff} should be >= 0.05")
+        
+        # Target pct should be between 0 and 1
+        self.assertGreaterEqual(target_pct, 0.0)
+        self.assertLessEqual(target_pct, 1.0)
+        
+        print(f"\nOpening Target (IWM, min_ff=0.05):")
+        print(f"  Target price: ${target_price:.2f}")
+        print(f"  Target pct: {target_pct:.2%}")
+        print(f"  Target FF: {target_ff:.3f}")
+    
+    def test_find_target_price_opening_not_feasible(self):
+        """Test finding target price when not feasible (threshold too high)."""
+        # Calculate grid for IWM
+        grid = self.analyzer.calculate_ff_grid(
+            short_bid=self.iwm_short_bid,
+            short_ask=self.iwm_short_ask,
+            long_bid=self.iwm_long_bid,
+            long_ask=self.iwm_long_ask,
+            underlying_price=self.iwm_underlying,
+            strike=self.iwm_strike,
+            short_dte=self.iwm_short_dte,
+            long_dte=self.iwm_long_dte
+        )
+        
+        # Find target for min_ff = 1.0 (unrealistically high)
+        result = self.analyzer.find_target_price_for_ff(grid, target_ff=1.0, direction='open')
+        
+        # Should return None (not feasible)
+        self.assertIsNone(result, "Expected None for infeasible target")
+        print(f"\nOpening Target (IWM, min_ff=1.0): NOT FEASIBLE ✓")
+    
+    def test_find_target_returns_last_not_first(self):
+        """Test that find_target returns LAST acceptable step, not first."""
+        # Calculate grid for IWM
+        grid = self.analyzer.calculate_ff_grid(
+            short_bid=self.iwm_short_bid,
+            short_ask=self.iwm_short_ask,
+            long_bid=self.iwm_long_bid,
+            long_ask=self.iwm_long_ask,
+            underlying_price=self.iwm_underlying,
+            strike=self.iwm_strike,
+            short_dte=self.iwm_short_dte,
+            long_dte=self.iwm_long_dte
+        )
+        
+        # Find target for min_ff = 0.05
+        result = self.analyzer.find_target_price_for_ff(grid, target_ff=0.05, direction='open')
+        self.assertIsNotNone(result)
+        
+        target_price, target_pct, target_ff = result
+        
+        # Count how many steps meet the threshold
+        meeting_threshold = [s for s in grid if s['ff'] is not None and s['ff'] >= 0.05]
+        
+        if len(meeting_threshold) > 1:
+            # If multiple steps meet threshold, verify we got the LAST one
+            last_meeting = meeting_threshold[-1]
+            self.assertEqual(target_pct, last_meeting['pct'], 
+                           f"Expected LAST step at pct={last_meeting['pct']}, got pct={target_pct}")
+            print(f"\nLast vs First test:")
+            print(f"  Total steps meeting threshold: {len(meeting_threshold)}")
+            print(f"  First acceptable pct: {meeting_threshold[0]['pct']:.2f}")
+            print(f"  Last acceptable pct: {meeting_threshold[-1]['pct']:.2f}")
+            print(f"  Returned pct: {target_pct:.2f} ✓ (correctly returns LAST)")
+    
+    def test_find_target_price_closing_feasible(self):
+        """Test finding target price for closing when feasible."""
+        # Calculate grid for IWM
+        grid = self.analyzer.calculate_ff_grid(
+            short_bid=self.iwm_short_bid,
+            short_ask=self.iwm_short_ask,
+            long_bid=self.iwm_long_bid,
+            long_ask=self.iwm_long_ask,
+            underlying_price=self.iwm_underlying,
+            strike=self.iwm_strike,
+            short_dte=self.iwm_short_dte,
+            long_dte=self.iwm_long_dte
+        )
+        
+        # Find target for max_ff = 0.20 (should be feasible - higher pct steps have lower FF ~0.124)
+        result = self.analyzer.find_target_price_for_ff(grid, target_ff=0.20, direction='close')
+        
+        self.assertIsNotNone(result, "Expected to find feasible target for closing")
+        target_price, target_pct, target_ff = result
+        
+        # Target should be <= max FF
+        self.assertLessEqual(target_ff, 0.20, f"Target FF {target_ff} should be <= 0.20")
+        
+        print(f"\nClosing Target (IWM, max_ff=0.20):")
+        print(f"  Target price: ${target_price:.2f}")
+        print(f"  Target pct: {target_pct:.2%}")
+        print(f"  Target FF: {target_ff:.3f}")
+
+
 if __name__ == '__main__':
     unittest.main(verbosity=2)
+

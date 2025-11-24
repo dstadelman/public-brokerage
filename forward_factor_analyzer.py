@@ -134,20 +134,22 @@ class ForwardFactorAnalyzer:
             return None
         
         # Calculate time to expiration in years
-        short_T = short_dte / 365.0
-        long_T = long_dte / 365.0
+        # Use minimum of 0.5 days for 0 DTE to represent intraday time value
+        effective_short_dte = max(short_dte, 0.5)
+        effective_long_dte = max(long_dte, 0.5)
+        short_T = effective_short_dte / 365.0
+        long_T = effective_long_dte / 365.0
         
-        # Calculate ATF drift for each expiration (market-implied interest rate)
-        short_atf_rate = self.calculate_atf_drift(underlying_price, option_chain_short, short_exp, short_dte)
-        long_atf_rate = self.calculate_atf_drift(underlying_price, option_chain_long, long_exp, long_dte)
+        # Use risk-free rate from config (more stable than ATF calculation)
+        r = config.get_ff_risk_free_rate()
         
-        # Estimate IV from prices using Black-Scholes with ATF rates
+        # Estimate IV from prices using Black-Scholes with risk-free rate
         short_iv = estimate_iv_from_price(
             option_price=short_price,
             S=underlying_price,
             K=strike,
             T=short_T,
-            r=short_atf_rate,  # Use ATF drift instead of static risk-free rate
+            r=r,
             q=0.0
         )
         
@@ -156,7 +158,7 @@ class ForwardFactorAnalyzer:
             S=underlying_price,
             K=strike,
             T=long_T,
-            r=long_atf_rate,  # Use ATF drift instead of static risk-free rate
+            r=r,
             q=0.0
         )
         
@@ -323,20 +325,19 @@ class ForwardFactorAnalyzer:
             if short_dte is None or long_dte is None:
                 return None
             
-            # Calculate IVs from MID prices using ATF rates
-            short_T = short_dte / 365.0
-            long_T = long_dte / 365.0
-            
-            # Calculate ATF drift for each expiration
-            short_atf_rate = self.calculate_atf_drift(underlying_price, short_chain, short_exp, short_dte)
-            long_atf_rate = self.calculate_atf_drift(underlying_price, long_chain, long_exp, long_dte)
+            # Calculate IVs from MID prices using config risk-free rate
+            # Use minimum of 0.5 days for 0 DTE to represent intraday time value
+            effective_short_dte = max(short_dte, 0.5)
+            effective_long_dte = max(long_dte, 0.5)
+            short_T = effective_short_dte / 365.0
+            long_T = effective_long_dte / 365.0
             
             short_iv = estimate_iv_from_price(
                 option_price=short_mid,
                 S=underlying_price,
                 K=strike,
                 T=short_T,
-                r=short_atf_rate,  # Use ATF drift
+                r=risk_free_rate,
                 q=0.0
             )
             
@@ -345,7 +346,7 @@ class ForwardFactorAnalyzer:
                 S=underlying_price,
                 K=strike,
                 T=long_T,
-                r=long_atf_rate,  # Use ATF drift
+                r=risk_free_rate,
                 q=0.0
             )
             
@@ -378,9 +379,7 @@ class ForwardFactorAnalyzer:
                 'spread_ask': long_option['ask'] - short_option['bid'],
                 'short_iv': short_iv,
                 'long_iv': long_iv,
-                'forward_factor': ff,
-                'short_atf_rate': short_atf_rate,
-                'long_atf_rate': long_atf_rate
+                'forward_factor': ff
             }
             
         except Exception as e:
@@ -652,8 +651,14 @@ class ForwardFactorAnalyzer:
         num_steps = 20
         
         # Convert DTEs to years for Black-Scholes
-        short_t = short_dte / 365.0
-        long_t = long_dte / 365.0
+        # Use minimum of 0.5 days for 0 DTE to represent intraday time value
+        effective_short_dte = max(short_dte, 0.5)
+        effective_long_dte = max(long_dte, 0.5)
+        short_t = effective_short_dte / 365.0
+        long_t = effective_long_dte / 365.0
+        
+        # Use risk-free rate from config
+        r = config.get_ff_risk_free_rate()
         
         for i in range(num_steps + 1):
             pct = i / num_steps
@@ -673,7 +678,7 @@ class ForwardFactorAnalyzer:
                     S=underlying_price,
                     K=strike,
                     T=short_t,
-                    r=0.0,  # Use ATF drift instead
+                    r=r,
                     option_type=option_type
                 )
                 
@@ -682,7 +687,7 @@ class ForwardFactorAnalyzer:
                     S=underlying_price,
                     K=strike,
                     T=long_t,
-                    r=0.0,  # Use ATF drift instead
+                    r=r,
                     option_type=option_type
                 )
                 

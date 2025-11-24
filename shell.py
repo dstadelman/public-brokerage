@@ -433,9 +433,9 @@ Initializing...
         parser = argparse.ArgumentParser(prog='open_position', add_help=False)
         parser.add_argument('symbol', help='Underlying symbol (e.g., AAPL)')
         parser.add_argument('expiration', help='Option expiration (YYYY-MM-DD)')
+        parser.add_argument('strike', type=float, help='Strike price')
         parser.add_argument('option_type', choices=['C', 'P', 'CALL', 'PUT'], 
                           help='Option type: C/CALL for calls, P/PUT for puts')
-        parser.add_argument('strike', type=float, help='Strike price')
         parser.add_argument('quantity', type=int, help='Number of contracts (positive=buy, negative=sell)')
         parser.add_argument('--max_wait_time', type=int, default=42, help='Max wait time per price level (seconds)')
         parser.add_argument('--execute', action='store_true', help='Execute actual orders (default: dry run)')
@@ -443,8 +443,8 @@ Initializing...
         try:
             parsed_args = parser.parse_args(shlex.split(args))
         except SystemExit:
-            print("Usage: open_position <symbol> <expiration> <type> <strike> <quantity> [--max_wait_time=42] [--execute]")
-            print("Example: open_position AAPL 2024-02-16 C 145.00 1 --execute")
+            print("Usage: open_position <symbol> <expiration> <strike> <type> <quantity> [--max_wait_time=42] [--execute]")
+            print("Example: open_position AAPL 2024-02-16 145.00 C 1 --execute")
             return
         
         if not self.default_account:
@@ -511,9 +511,9 @@ Initializing...
         parser = argparse.ArgumentParser(prog='close_position', add_help=False)
         parser.add_argument('symbol', help='Underlying symbol (e.g., AAPL)')
         parser.add_argument('expiration', help='Option expiration (YYYY-MM-DD)')
+        parser.add_argument('strike', type=float, help='Strike price')
         parser.add_argument('option_type', choices=['C', 'P', 'CALL', 'PUT'], 
                           help='Option type: C/CALL for calls, P/PUT for puts')
-        parser.add_argument('strike', type=float, help='Strike price')
         parser.add_argument('quantity', type=int, help='Number of contracts to close (always positive - direction determined automatically)')
         parser.add_argument('--max_wait_time', type=int, default=42, help='Max wait time per price level (seconds)')
         parser.add_argument('--execute', action='store_true', help='Execute actual orders (default: dry run)')
@@ -521,8 +521,8 @@ Initializing...
         try:
             parsed_args = parser.parse_args(shlex.split(args))
         except SystemExit:
-            print("Usage: close_position <symbol> <expiration> <type> <strike> <quantity> [--max_wait_time=42] [--execute]")
-            print("Example: close_position AAPL 2024-02-16 C 145.00 1 --execute")
+            print("Usage: close_position <symbol> <expiration> <strike> <type> <quantity> [--max_wait_time=42] [--execute]")
+            print("Example: close_position AAPL 2024-02-16 145.00 C 1 --execute")
             return
         
         if not self.default_account:
@@ -1104,6 +1104,9 @@ Initializing...
             ("quote <symbol>", "Get real-time quote"),
             ("open_call_spread", "Open call spread with walk limit orders"),
             ("close_call_spread", "Close call spreads with walk limit orders"),
+            ("open_ff", "Open calendar spread at forward factor threshold"),
+            ("close_ff", "Close calendar spread at forward factor threshold"),
+            ("ff_info", "Get current forward factor for a calendar spread"),
             ("open_position", "Open single-leg option position"),
             ("close_position", "Close single-leg option position"),
             ("status", "Show all background process status"),
@@ -1118,9 +1121,12 @@ Initializing...
         print(f"\n{Colors.BOLD}Examples:{Colors.END}")
         print("  open_call_spread AAPL 2024-07-19 170 2024-08-16 175 1 --execute")
         print("  close_call_spread AAPL --max_wait_time=60 --execute")
-        print("  open_position AAPL 2024-02-16 C 145.00 1 --execute")
-        print("  close_position AAPL 2024-02-16 C 145.00 -1 --execute")
-        print("  open_position SPY 2024-01-19 P 420.00 -2  # dry-run (no --execute)")
+        print("  open_ff IWM 2025-11-21 2025-12-19 240 1 --min_ff=0.2 --execute")
+        print("  close_ff SPY --max_ff=0.0 --execute")
+        print("  ff_info SPY 2025-02-21 2025-03-21 500.00")
+        print("  open_position AAPL 2024-02-16 145.00 C 1 --execute")
+        print("  close_position AAPL 2024-02-16 145.00 C 1 --execute")
+        print("  open_position SPY 2024-01-19 420.00 P -2  # dry-run (no --execute)")
         print()
     
     def do_exit(self, args):
@@ -1213,6 +1219,8 @@ Initializing...
                                 short_exp = spread.short_leg.expiration_date.strftime('%Y-%m-%d')
                                 long_exp = spread.long_leg.expiration_date.strftime('%Y-%m-%d')
                                 
+                                logger.info(f"Analyzing calendar spread: {underlying} ${strike} {short_exp}/{long_exp}")
+                                
                                 ff_analysis = analyzer.analyze_calendar_spread_for_reporting(
                                     symbol=underlying,
                                     short_exp=short_exp,
@@ -1221,6 +1229,7 @@ Initializing...
                                 )
                                 
                                 if ff_analysis:
+                                    logger.info(f"FF analysis successful: FF={ff_analysis['forward_factor']:.3f}")
                                     ff = ff_analysis['forward_factor']
                                     ff_color = Colors.GREEN if ff >= 0.2 else Colors.YELLOW if ff >= 0 else Colors.RED
                                     
@@ -1239,11 +1248,16 @@ Initializing...
                                     # Show ATF rates
                                     if 'short_atf_rate' in ff_analysis and 'long_atf_rate' in ff_analysis:
                                         print(f"  ATF Rates: Short {ff_analysis['short_atf_rate']*100:.2f}% | Long {ff_analysis['long_atf_rate']*100:.2f}%")
+                                else:
+                                    logger.warning(f"FF analysis returned None for {underlying} ${strike}")
+                                    print(f"\n{summary['underlying']}: {summary['short_strike']}/{summary['long_strike']} "
+                                          f"x{summary['quantity']} (Exp: {summary['expiration']}) - FF analysis unavailable (returned None)")
                                         
                             except Exception as e:
+                                logger.error(f"FF analysis error for {underlying} ${strike}: {e}", exc_info=True)
                                 # Fallback to basic display if FF analysis fails
                                 print(f"\n{summary['underlying']}: {summary['short_strike']}/{summary['long_strike']} "
-                                      f"x{summary['quantity']} (Exp: {summary['expiration']}) - FF analysis unavailable")
+                                      f"x{summary['quantity']} (Exp: {summary['expiration']}) - FF analysis error: {e}")
                         else:
                             # Non-calendar spread (different strikes) - just show basic info
                             print(f"\n{summary['underlying']}: {summary['short_strike']}/{summary['long_strike']} "

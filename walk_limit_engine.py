@@ -1787,6 +1787,11 @@ class WalkLimitEngine:
             bid = float(quote.bid)
             ask = float(quote.ask)
             
+            # For zero bid, use $0.01 as minimum to enable walk limit
+            if bid == 0 and ask > 0:
+                self.logger.info(f"Zero bid detected for {option_symbol}, using $0.01 minimum: bid=$0.01, ask=${ask:.2f}")
+                return 0.01, ask
+            
             # Validate reasonable spread
             if bid <= 0 or ask <= 0 or ask <= bid:
                 self.logger.warning(f"Invalid bid/ask for {option_symbol}: bid={bid}, ask={ask}")
@@ -1795,6 +1800,10 @@ class WalkLimitEngine:
                 if chain_quote and chain_quote.bid is not None and chain_quote.ask is not None:
                     fallback_bid = float(chain_quote.bid)
                     fallback_ask = float(chain_quote.ask)
+                    # For zero bid from chain, use $0.01 as minimum
+                    if fallback_bid == 0 and fallback_ask > 0:
+                        self.logger.info(f"Zero bid from chain for {option_symbol}, using $0.01 minimum: bid=$0.01, ask=${fallback_ask:.2f}")
+                        return 0.01, fallback_ask
                     if fallback_bid > 0 and fallback_ask > fallback_bid:
                         self.logger.info(f"Option pricing from chain for {option_symbol}: bid=${fallback_bid:.2f}, ask=${fallback_ask:.2f}")
                         return fallback_bid, fallback_ask

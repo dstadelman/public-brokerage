@@ -819,16 +819,16 @@ class TestFFGrid(unittest.TestCase):
             long_dte=self.iwm_long_dte
         )
         
-        # Find target for max_ff = 0.20 (should be feasible - higher pct steps have lower FF ~0.124)
-        result = self.analyzer.find_target_price_for_ff(grid, target_ff=0.20, direction='close')
+        # Find target for max_ff = 0.25 (should be feasible - FF ranges from ~0.278 to ~0.200)
+        result = self.analyzer.find_target_price_for_ff(grid, target_ff=0.25, direction='close')
         
         self.assertIsNotNone(result, "Expected to find feasible target for closing")
         target_price, target_pct, target_ff = result
         
         # Target should be <= max FF
-        self.assertLessEqual(target_ff, 0.20, f"Target FF {target_ff} should be <= 0.20")
+        self.assertLessEqual(target_ff, 0.25, f"Target FF {target_ff} should be <= 0.25")
         
-        print(f"\nClosing Target (IWM, max_ff=0.20):")
+        print(f"\nClosing Target (IWM, max_ff=0.25):")
         print(f"  Target price: ${target_price:.2f}")
         print(f"  Target pct: {target_pct:.2%}")
         print(f"  Target FF: {target_ff:.3f}")

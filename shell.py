@@ -860,8 +860,14 @@ Initializing...
             from utils.black_scholes import estimate_iv_from_price
             from utils.forward_factor import calculate_forward_factor_from_ivs
             
-            short_dte_years = short_dte / 365.0
-            long_dte_years = long_dte / 365.0
+            # Use 0.5-day minimum for 0 DTE options
+            effective_short_dte = max(short_dte, 0.5)
+            effective_long_dte = max(long_dte, 0.5)
+            short_dte_years = effective_short_dte / 365.0
+            long_dte_years = effective_long_dte / 365.0
+            
+            # Get risk-free rate from config for consistency
+            risk_free_rate = config.get_ff_risk_free_rate()
             
             # Helper function to safely calculate IV
             def safe_estimate_iv(price, S, K, T, r, min_price=0.01):
@@ -878,10 +884,10 @@ Initializing...
             # - We SELL short leg at their ASK (we receive less)
             # - We BUY long leg at their BID (we pay less)
             short_iv_at_bid = safe_estimate_iv(
-                short_option['ask'], underlying_price, strike, short_dte_years, 0.045
+                short_option['ask'], underlying_price, strike, short_dte_years, risk_free_rate
             )
             long_iv_at_bid = safe_estimate_iv(
-                long_option['bid'], underlying_price, strike, long_dte_years, 0.045
+                long_option['bid'], underlying_price, strike, long_dte_years, risk_free_rate
             )
             ff_at_bid = None
             if short_iv_at_bid is not None and long_iv_at_bid is not None:
@@ -894,10 +900,10 @@ Initializing...
             
             # At MID prices (expected execution):
             short_iv_at_mid = safe_estimate_iv(
-                short_mid, underlying_price, strike, short_dte_years, 0.045
+                short_mid, underlying_price, strike, short_dte_years, risk_free_rate
             )
             long_iv_at_mid = safe_estimate_iv(
-                long_mid, underlying_price, strike, long_dte_years, 0.045
+                long_mid, underlying_price, strike, long_dte_years, risk_free_rate
             )
             ff_at_mid = None
             if short_iv_at_mid is not None and long_iv_at_mid is not None:
@@ -912,10 +918,10 @@ Initializing...
             # - We SELL short leg at their BID (we receive more)
             # - We BUY long leg at their ASK (we pay more)
             short_iv_at_ask = safe_estimate_iv(
-                short_option['bid'], underlying_price, strike, short_dte_years, 0.045
+                short_option['bid'], underlying_price, strike, short_dte_years, risk_free_rate
             )
             long_iv_at_ask = safe_estimate_iv(
-                long_option['ask'], underlying_price, strike, long_dte_years, 0.045
+                long_option['ask'], underlying_price, strike, long_dte_years, risk_free_rate
             )
             ff_at_ask = None
             if short_iv_at_ask is not None and long_iv_at_ask is not None:

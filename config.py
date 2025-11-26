@@ -69,7 +69,7 @@ class Config:
             # Forward Factor settings
             'ff_min_threshold_default': 0.2,
             'ff_max_threshold_default': 0.0,
-            'ff_risk_free_rate': 0.045,
+            'ff_risk_free_rate': 0.0425,
         }
     
     def get(self, key: str, default: Any = None) -> Any:
@@ -133,7 +133,7 @@ class Config:
     
     def get_ff_risk_free_rate(self) -> float:
         """Get risk-free rate for forward factor calculations."""
-        return self.get('ff_risk_free_rate', 0.045)
+        return self.get('ff_risk_free_rate', 0.0425)
 
 
 # Global config instance

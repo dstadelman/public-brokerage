@@ -762,7 +762,8 @@ class ConfirmationCard:
         max_wait_time: int = 42,
         account_id: Optional[str] = None,
         execute: bool = False,
-        analyzer=None  # ForwardFactorAnalyzer instance
+        analyzer=None,  # ForwardFactorAnalyzer instance
+        option_type: str = 'C'  # 'C' for calls, 'P' for puts
     ) -> bool:
         """
         Display confirmation card for forward factor based calendar spread trades.
@@ -779,6 +780,7 @@ class ConfirmationCard:
             account_id: Account ID
             execute: Whether to execute actual orders
             analyzer: ForwardFactorAnalyzer instance (required)
+            option_type: 'C' for calls or 'P' for puts (default: 'C')
             
         Returns:
             True if user confirms, False if cancelled
@@ -824,9 +826,9 @@ class ConfirmationCard:
             short_chain = get_option_chain(self.client, account_id, instrument, short_date)
             long_chain = get_option_chain(self.client, account_id, instrument, long_date)
             
-            # Find specific options
-            short_option = analyzer._find_option_in_chain(short_chain, strike)
-            long_option = analyzer._find_option_in_chain(long_chain, strike)
+            # Find specific options (pass option_type)
+            short_option = analyzer._find_option_in_chain(short_chain, strike, option_type)
+            long_option = analyzer._find_option_in_chain(long_chain, strike, option_type)
             
             if not short_option or not long_option:
                 print(f"❌ Could not find strike {strike} in option chains")
@@ -865,6 +867,7 @@ class ConfirmationCard:
             # Calculate FF grid using new grid-based approach
             try:
                 # Calculate FF grid (20 steps through bid-ask spread)
+                bs_option_type = 'call' if option_type == 'C' else 'put'
                 ff_grid = analyzer.calculate_ff_grid(
                     short_bid=float(short_option['bid']),
                     short_ask=float(short_option['ask']),
@@ -873,7 +876,8 @@ class ConfirmationCard:
                     underlying_price=float(underlying_quote.last),
                     strike=float(strike),
                     short_dte=short_dte,
-                    long_dte=long_dte
+                    long_dte=long_dte,
+                    option_type=bs_option_type
                 )
                 
                 # Get FF at key execution points

@@ -237,12 +237,12 @@ class WalkLimitEngine:
         
         return process_ids
     
-    def _construct_option_symbol(self, underlying: str, expiration: str, strike: float) -> str:
+    def _construct_option_symbol(self, underlying: str, expiration: str, strike: float, option_type: str = 'C') -> str:
         """Construct option symbol using standardized OSI format"""
         from utils import format_osi_symbol
         
-        # Use the standardized OSI formatter for call options
-        return format_osi_symbol(underlying, expiration, "C", strike)
+        # Use the standardized OSI formatter
+        return format_osi_symbol(underlying, expiration, option_type, strike)
     
     def _get_spread_pricing(self, short_symbol: str, long_symbol: str, account_id: str) -> tuple[Optional[float], Optional[float]]:
         """Get current bid/ask pricing for a spread using the same method as confirmation_card.py"""
@@ -1421,7 +1421,8 @@ class WalkLimitEngine:
         min_ff: float = 0.2,
         max_wait_time: int = 42,
         execute_mode: bool = False,
-        analyzer=None  # ForwardFactorAnalyzer instance
+        analyzer=None,  # ForwardFactorAnalyzer instance
+        option_type: str = 'C'  # 'C' for calls, 'P' for puts
     ) -> Optional[str]:
         """
         Start walk limit process to open calendar spread at min forward factor.
@@ -1452,8 +1453,8 @@ class WalkLimitEngine:
         
         try:
             # Construct option symbols
-            short_symbol = self._construct_option_symbol(symbol, short_exp, strike)
-            long_symbol = self._construct_option_symbol(symbol, long_exp, strike)
+            short_symbol = self._construct_option_symbol(symbol, short_exp, strike, option_type)
+            long_symbol = self._construct_option_symbol(symbol, long_exp, strike, option_type)
             
             # Get current spread pricing from market
             spread_bid, spread_ask = self._get_spread_pricing(short_symbol, long_symbol, account_id)
@@ -1494,6 +1495,7 @@ class WalkLimitEngine:
             long_dte = (long_date - today).days
             
             # Calculate FF grid
+            bs_option_type = 'call' if option_type == 'C' else 'put'
             ff_grid = analyzer.calculate_ff_grid(
                 short_bid=float(short_quote.bid),
                 short_ask=float(short_quote.ask),
@@ -1502,7 +1504,8 @@ class WalkLimitEngine:
                 underlying_price=underlying_price,
                 strike=strike,
                 short_dte=short_dte,
-                long_dte=long_dte
+                long_dte=long_dte,
+                option_type=bs_option_type
             )
             
             # Log grid summary
@@ -1532,6 +1535,8 @@ class WalkLimitEngine:
             
             # Create process
             process_id = str(uuid.uuid4())[:8]
+            # Ensure starting price is at least $0.01 for calendar spreads
+            starting_price = max(0.01, round(spread_bid, 2))
             process = WalkLimitProcess(
                 process_id=process_id,
                 symbol=symbol,
@@ -1543,7 +1548,7 @@ class WalkLimitEngine:
                 max_wait_time=max_wait_time,
                 execute_mode=execute_mode,
                 status=ProcessStatus.STARTING,
-                current_price=round(spread_bid, 2),
+                current_price=starting_price,
                 target_price=round(target_price, 2),
                 increment=increment,
                 attempts=0,
@@ -1589,7 +1594,8 @@ class WalkLimitEngine:
         max_ff: float = 0.0,
         max_wait_time: int = 42,
         execute_mode: bool = False,
-        analyzer=None  # ForwardFactorAnalyzer instance
+        analyzer=None,  # ForwardFactorAnalyzer instance
+        option_type: str = 'C'  # 'C' for calls, 'P' for puts
     ) -> Optional[str]:
         """
         Start walk limit process to close calendar spread at max forward factor.
@@ -1620,8 +1626,8 @@ class WalkLimitEngine:
         
         try:
             # Construct option symbols
-            short_symbol = self._construct_option_symbol(symbol, short_exp, strike)
-            long_symbol = self._construct_option_symbol(symbol, long_exp, strike)
+            short_symbol = self._construct_option_symbol(symbol, short_exp, strike, option_type)
+            long_symbol = self._construct_option_symbol(symbol, long_exp, strike, option_type)
             
             # Get current spread pricing from market
             spread_bid, spread_ask = self._get_spread_pricing(short_symbol, long_symbol, account_id)
@@ -1662,6 +1668,7 @@ class WalkLimitEngine:
             long_dte = (long_date - today).days
             
             # Calculate FF grid
+            bs_option_type = 'call' if option_type == 'C' else 'put'
             ff_grid = analyzer.calculate_ff_grid(
                 short_bid=float(short_quote.bid),
                 short_ask=float(short_quote.ask),
@@ -1670,7 +1677,8 @@ class WalkLimitEngine:
                 underlying_price=underlying_price,
                 strike=strike,
                 short_dte=short_dte,
-                long_dte=long_dte
+                long_dte=long_dte,
+                option_type=bs_option_type
             )
             
             # Log grid summary

@@ -386,20 +386,24 @@ class ForwardFactorAnalyzer:
             logger.error(f"Error analyzing calendar spread: {e}")
             return None
     
-    def _find_option_in_chain(self, chain, strike: float) -> Optional[Dict]:
+    def _find_option_in_chain(self, chain, strike: float, option_type: str = 'C') -> Optional[Dict]:
         """
         Find a specific strike in an option chain.
         
         Args:
             chain: OptionChainResponse object
             strike: Strike price to find
+            option_type: 'C' for calls or 'P' for puts (default: 'C')
             
         Returns:
             Option data dict with pricing (IV will be calculated later), or None if not found
         """
-        # Check if chain has calls (OptionChainResponse object)
-        if hasattr(chain, 'calls'):
-            for option in chain.calls:
+        # Select calls or puts based on option_type
+        option_list = chain.calls if option_type == 'C' else chain.puts
+        
+        # Check if chain has the requested option type
+        if hasattr(chain, 'calls' if option_type == 'C' else 'puts'):
+            for option in option_list:
                 # Extract strike from OSI symbol
                 try:
                     # OSI format: SYMBOL[spaces]YYMMDD[C/P]PPPPPSSS
